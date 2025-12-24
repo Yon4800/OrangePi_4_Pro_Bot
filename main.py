@@ -148,7 +148,7 @@ async def on_note(note):
                     max_output_tokens=1000,
                 ),
             )
-            safe_text = response.text.replace(f"@{note["mentions"]}", "").strip()
+            safe_text = response.text.replace(f"@{note['mentions']}", "").strip()
             mk.notes_create(
                 text=safe_text,
                 reply_id=note["id"],
