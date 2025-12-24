@@ -146,7 +146,7 @@ async def runner():
                     await on_note(note)
                 if data["body"]["type"] == "followed":
                     user = data["body"]["body"]
-                    await on_follow(user)        
+                    await on_follow(user)
             await asyncio.sleep(1)
 
 
@@ -184,7 +184,7 @@ async def on_follow(user):
 
 
 async def main():
-    await asyncio.gather(asyncio.create_task(runner()), asyncio.create_task(teiki()))
+    await asyncio.gather(runner(), teiki())
 
 
 asyncio.run(main())
