@@ -157,7 +157,7 @@ async def on_note(note):
                 note_id=note["id"], reaction=":fast_rotating_think:"
             )
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.0-flash",
                 contents=note["text"],
                 config=types.GenerateContentConfig(
                     system_instruction=seikaku
