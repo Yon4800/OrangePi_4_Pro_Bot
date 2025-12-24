@@ -144,7 +144,7 @@ async def on_note(note):
                 model="gemini-2.5-flash",
                 contents=note["text"],
                 config=types.GenerateContentConfig(
-                    system_instruction=seikaku + "\n" + note["user"]["name"] + "という方が返信しました。",
+                    system_instruction=seikaku + "\n" + note["user"]["name"] + "という方にメンションされました。",
                     max_output_tokens=1000,
                 ),
             )
