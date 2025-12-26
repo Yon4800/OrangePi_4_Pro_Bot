@@ -27,9 +27,11 @@ ohiru = "12:00"
 
 oyatsu = "15:00"
 
+oyatsu = "17:00"
+
 yuuhann = "19:00"
 
-oyasumi = "19:00"
+oyasumi = "22:00"
 
 oyasumi2 = "02:00"
 
@@ -93,6 +95,14 @@ def job2():
         no_extract_mentions=True,
     )
 
+def job2_5():
+    mk.notes_create(
+        "なにか追加してほしい機能があったら言ってね:neko_relax:",
+        visibility=NoteVisibility.HOME,
+        no_extract_mentions=True,
+    )
+
+
 
 def job3():
     mk.notes_create(
@@ -121,6 +131,7 @@ def job5():
 schedule.every().day.at(oha).do(job0)
 schedule.every().day.at(ohiru).do(job1)
 schedule.every().day.at(oyatsu).do(job2)
+schedule.every().day.at(teiki).do(job2_5)
 schedule.every().day.at(yuuhann).do(job3)
 schedule.every().day.at(oyasumi).do(job4)
 schedule.every().day.at(oyasumi2).do(job5)
