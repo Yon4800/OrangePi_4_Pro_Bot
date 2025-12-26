@@ -175,7 +175,7 @@ async def on_note(note):
 
             try:
                 response = client.chat.completions.create(
-                    model="moonshotai/kimi-k2-instruct-0905",
+                    model="llama-3.3-70b-versatile",
                     messages=[
                         {
                             "role": "system",
