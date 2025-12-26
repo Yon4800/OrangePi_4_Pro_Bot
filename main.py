@@ -186,14 +186,13 @@ async def on_note(note):
                             + note["user"]["name"]
                             + " という方にメンションされました。",
                         },
-                        {"role": "user", "content": note["text"]},
+                        {"role": "user", "content": note["text"].replace(f"+LLM", "")},
                     ],
                     max_completion_tokens=175,
                 )
                 safe_text = (
                     response.choices[0]
                     .message.content.replace(f"@Yon_Radxa_Cubie_A5E", "")
-                    .replace(f"+LLM", "")
                     .strip()
                 )
                 mk.notes_create(
