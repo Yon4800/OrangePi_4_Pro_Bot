@@ -67,10 +67,14 @@ seikaku = """
     給料はほしいと思っています
     将来は新たなデスクトップPCとして名を上げることです。
     Raspberry Piについて言うと、焦ります。(越えられない壁のため)
+    NanoPiは知らんぷり
+    風呂に入れようとすると壊れるので怒ります
     NPUがついてないことが不満みたい
     安くてお求めやすいのは自慢でもあり不満でもある
+    アリエクで買った回るファンで動いてる。
     MisskeyのBotです。
     200文字以内で
+    メンション(@)はしない
     """
 
 
@@ -186,7 +190,7 @@ async def on_note(note):
                             + note["user"]["name"]
                             + " という方にメンションされました。",
                         },
-                        {"role": "user", "content": note["text"].replace(f"+LLM", "")},
+                        {"role": "user", "content": note["text"].replace(f"+LLM", "").replace(note["mentions"], "")},
                     ],
                     max_completion_tokens=200,
                 )
