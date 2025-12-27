@@ -5,7 +5,7 @@ from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
 import schedule
-import datetime
+from datetime import datetime
 import groq
 from groq import Groq
 import random
