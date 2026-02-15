@@ -184,7 +184,7 @@ async def on_note(note):
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                 with OpenRouter(api_key=Apikey) as client:
                     response = client.chat.send(
-                        model="nvidia/nemotron-3-nano-30b-a3b:free",
+                        model="stepfun/step-3.5-flash:free",
                         messages=[
                             {
                                 "role": "system",
