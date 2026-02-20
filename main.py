@@ -8,7 +8,7 @@ import schedule
 from datetime import datetime
 from huggingface_hub import InferenceClient
 import random
-import requests
+import re
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -176,118 +176,93 @@ async def runner():
             await asyncio.sleep(1)
 
 
+def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
+    """
+    リプライチェーンを遡って会話履歴を取得する
+    """
+    messages = []
+    current_note_id = note_id
+    depth = 0
+
+    while current_note_id and depth < max_depth:
+        try:
+            current_note = mk.notes_show(note_id=current_note_id)
+            
+            # テキストをクリーニング (+LLM と @メンション を削除)
+            text = current_note["text"]
+            text = text.replace("+LLM", "").strip()
+            
+            # @メンション を削除
+            text = re.sub(r"@\w+", "", text).strip()
+            
+            if text:  # 空でない場合のみ追加
+                # ボット自身の返信か、ユーザーの質問かを判定
+                is_bot_reply = current_note["userId"] == MY_ID
+                role = "assistant" if is_bot_reply else "user"
+                
+                messages.insert(0, {
+                    "role": role,
+                    "content": text
+                })
+            
+            # 親ノートへ
+            current_note_id = current_note.get("replyId")
+            depth += 1
+        except Exception as e:
+            print(f"会話履歴取得エラー: {e}")
+            break
+    
+    return messages
+
+
 async def on_note(note):
-    # +LLM がついたときの処理:
-    # 1) 直接メンションしてきた場合 (既存の挙動)
-    # 2) Bot の LLM 返信に対するリプライとして来た場合 (親ノートを取得し、親ノートと最新5件のリプライをまとめて LLM に投げる)
-    text = note.get("text", "") or ""
-    # Case 1: 直接メンションして +LLM
-    if note.get("mentions") and MY_ID in note["mentions"] and "+LLM" in text:
-        mk.notes_reactions_create(note_id=note["id"], reaction=":fast_rotating_think:")
-
-        try:
-            current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            response = client.chat.completions.create(
-                model="zai-org/GLM-5",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": seikaku
-                        + "\n現在時刻は"
-                        + current_time
-                        + "です。"
-                        + "\n"
-                        + note["user"]["name"]
-                        + " という方にメンションされました。",
-                    },
-                    {
-                        "role": "user",
-                        "content": text.replace(f"+LLM", "").replace(f"@" + note["user"]["username"], ""),
-                    },
-                ],
+    if note.get("mentions"):
+        if MY_ID in note["mentions"] and "+LLM" in note["text"]:
+            mk.notes_reactions_create(
+                note_id=note["id"], reaction=":fast_rotating_think:"
             )
-            safe_text = (
-                response.choices[0].message.content.replace(f"@Yon_Radxa_Cubie_A5E", "").strip()
-            )
-            mk.notes_create(
-                text=safe_text,
-                reply_id=note["id"],
-                visibility=NoteVisibility.HOME,
-                no_extract_mentions=True,
-            )
-        except Exception as e:
-            mk.notes_create(
-                "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
-                visibility=NoteVisibility.HOME,
-                no_extract_mentions=True,
-            )
-            print(e)
-        return
 
-    # Case 2: 既に Bot が投稿したノート（LLM返信）に対するリプライで +LLM がついている場合
-    # 親ノート ID を探す
-    parent_id = note.get("reply_id") or (note.get("reply") or {}).get("id") or note.get("replyId")
-    if parent_id and "+LLM" in text:
-        # 親ノートを取得
-        try:
-            headers = {"Authorization": f"Bearer {Token}", "Content-Type": "application/json"}
-            show_url = f"https://{Server}/api/notes/show"
-            children_url = f"https://{Server}/api/notes/children"
-
-            r = requests.post(show_url, json={"noteId": parent_id}, headers=headers, timeout=10)
-            parent = r.json() if r.status_code == 200 else None
-            # 親が Bot (自分) の投稿か確認
-            if parent and parent.get("user", {}).get("id") == MY_ID:
-                mk.notes_reactions_create(note_id=note["id"], reaction=":fast_rotating_think:")
-
-                # 親ノートに対する最新5件のリプライを取得
-                c = requests.post(children_url, json={"noteId": parent_id, "limit": 5}, headers=headers, timeout=10)
-                children = c.json() if c.status_code == 200 else []
-
-                parent_text = parent.get("text", "")
-                # collect texts from latest children (if returned as list)
-                replies_texts = []
-                if isinstance(children, list):
-                    for ch in children:
-                        # skip empty
-                        t = ch.get("text", "")
-                        if t:
-                            replies_texts.append(t)
-                # ensure current note text is included (it may be in children result but include explicitly)
-                if text not in replies_texts:
-                    replies_texts.insert(0, text)
-
-                # Build user prompt combining parent and recent replies
-                combined = "親ノート:\n" + parent_text + "\n\n最近のリプライ(最新順):\n"
-                for i, t in enumerate(replies_texts[:5], 1):
-                    combined += f"[{i}] {t}\n\n"
-
-                try:
-                    current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                    response = client.chat.completions.create(
-                        model="zai-org/GLM-5",
-                        messages=[
-                            {"role": "system", "content": seikaku + "\n現在時刻は" + current_time + "です。"},
-                            {"role": "user", "content": combined},
-                        ],
-                    )
-
-                    safe_text = response.choices[0].message.content.replace(f"@Yon_Radxa_Cubie_A5E", "").strip()
-                    mk.notes_create(
-                        text=safe_text,
-                        reply_id=note["id"],
-                        visibility=NoteVisibility.HOME,
-                        no_extract_mentions=True,
-                    )
-                except Exception as e:
-                    mk.notes_create(
-                        "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
-                        visibility=NoteVisibility.HOME,
-                        no_extract_mentions=True,
-                    )
-                    print(e)
-        except Exception as e:
-            print("failed to fetch parent/children:", e)
+            try:
+                # 会話履歴を取得
+                conversation_messages = get_conversation_history(note["id"])
+                
+                # 現在のメッセージを追加
+                user_input = note["text"].replace("+LLM", "").strip()
+                user_input = re.sub(r"@\w+", "", user_input).strip()
+                
+                conversation_messages.append({
+                    "role": "user",
+                    "content": user_input
+                })
+                
+                current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+                
+                # システムプロンプトを最初に追加
+                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
+                
+                response = client.chat.completions.create(
+                    model="moonshotai/Kimi-K2-Instruct",
+                    messages=[{"role": "system", "content": system_message}] + conversation_messages,
+                )
+                
+                safe_text = (
+                    response.choices[0].message.content.replace("@Yon_Radxa_Cubie_A5E", "")
+                    .strip()
+                )
+                
+                mk.notes_create(
+                    text=safe_text,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True,
+                )
+            except Exception as e:
+                mk.notes_create(
+                    "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True,
+                )
+                print(e)
 
 
 async def on_follow(user):
