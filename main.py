@@ -184,7 +184,7 @@ async def on_note(note):
 
             try:
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                response = client.chat_completion(
+                response = client.chat.completions.create(
                     model="MiniMaxAI/MiniMax-M2.5",
                     messages=[
                         {
@@ -206,8 +206,7 @@ async def on_note(note):
                     ],
                 )
                 safe_text = (
-                    response.choices[0]
-                    .message.content.replace(f"@Yon_Radxa_Cubie_A5E", "")
+                    response.choices[0].message.replace(f"@Yon_Radxa_Cubie_A5E", "")
                     .strip()
                 )
                 mk.notes_create(
