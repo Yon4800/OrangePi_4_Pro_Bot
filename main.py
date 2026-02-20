@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 import schedule
 from datetime import datetime
-from openrouter import OpenRouter
+from huggingface_hub import InferenceClient
 import random
 
 load_dotenv()
@@ -15,6 +15,8 @@ Server = os.getenv("SERVER")
 Apikey = os.getenv("APIKEY")
 mk = Misskey(Server)
 mk.token = Token
+
+client = InferenceClient(api_key=os.environ["APIKEY"])
 
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
@@ -182,39 +184,38 @@ async def on_note(note):
 
             try:
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                with OpenRouter(api_key=Apikey) as client:
-                    response = client.chat.send(
-                        model="stepfun/step-3.5-flash:free",
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": seikaku
-                                + "\n現在時刻は"
-                                + current_time
-                                + "です。"
-                                + "\n"
-                                + note["user"]["name"]
-                                + " という方にメンションされました。",
-                            },
-                            {
-                                "role": "user",
-                                "content": note["text"]
-                                .replace(f"+LLM", "")
-                                .replace(f"@" + note["user"]["username"], ""),
-                            },
-                        ],
-                    )
-                    safe_text = (
-                        response.choices[0]
-                        .message.content.replace(f"@Yon_Radxa_Cubie_A5E", "")
-                        .strip()
-                    )
-                    mk.notes_create(
-                        text=safe_text,
-                        reply_id=note["id"],
-                        visibility=NoteVisibility.HOME,
-                        no_extract_mentions=True,
-                    )
+                response = client.chat_completion(
+                    model="MiniMaxAI/MiniMax-M2.5",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": seikaku
+                            + "\n現在時刻は"
+                            + current_time
+                            + "です。"
+                            + "\n"
+                            + note["user"]["name"]
+                            + " という方にメンションされました。",
+                        },
+                        {
+                            "role": "user",
+                            "content": note["text"]
+                            .replace(f"+LLM", "")
+                            .replace(f"@" + note["user"]["username"], ""),
+                        },
+                    ],
+                )
+                safe_text = (
+                    response.choices[0]
+                    .message.content.replace(f"@Yon_Radxa_Cubie_A5E", "")
+                    .strip()
+                )
+                mk.notes_create(
+                    text=safe_text,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True,
+                )
             except Exception as e:
                 mk.notes_create(
                     "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
