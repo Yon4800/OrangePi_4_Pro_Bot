@@ -1,1 +1,1 @@
-screen -AmdS cubie_san python main.py
+screen -AmdS Orange_San python main.py
