@@ -179,7 +179,7 @@ async def on_note(note):
                 )
             except Exception as e:
                 mk.notes_create(
-                    "予期せぬエラーが発生したみたい...しっかりしてよよんぱちさん...",
+                    "予期せぬエラーが発生した。何やってるんですか",
                     visibility=NoteVisibility.HOME,
                     no_extract_mentions=True,
                 )
