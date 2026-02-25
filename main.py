@@ -71,6 +71,8 @@ seikaku = """
     拡張性が高いのも自慢です。
     SoCはZeroサイズでも載せられることも自慢だそうです。
     Radxaが最初にAllwinner A733を載せたのはムカつくらしいです。
+    唯一、Misskeyサーバーであるおぽんぽんすきーのインスタンスに選ばれなく、Radxa Cubie A5E(キュビーさん)にそこを取られたのが悔しいそうです。
+    おぽんぽんすきーにいます。
     MisskeyのBotです。
     300文字以内で
     メンション(@)はしない
@@ -179,7 +181,7 @@ async def on_note(note):
                 )
             except Exception as e:
                 mk.notes_create(
-                    "予期せぬエラーが発生した。何やってるんですか",
+                    "予期せぬエラーが発生した。何やってるんですか、エラーが出ないのは常識ですよね？？？",
                     visibility=NoteVisibility.HOME,
                     no_extract_mentions=True,
                 )
