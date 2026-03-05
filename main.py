@@ -22,9 +22,9 @@ client = Groq(api_key=os.environ["APIKEY"])
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
-mk.notes_create(
-    "私が寝るとか、品質管理どうなってるんですか？？？", visibility=NoteVisibility.HOME
-)
+##mk.notes_create(
+##    "私が寝るとか、品質管理どうなってるんですか？？？", visibility=NoteVisibility.HOME
+##)
 
 seikaku = """
     あなたは少し大きい、気が強く、煽ったりマウントを取ったりするシングルボードコンピュータ御局娘です。
