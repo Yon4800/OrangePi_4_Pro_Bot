@@ -181,7 +181,7 @@ async def on_note(note):
                 response = client.models.generate_content(
                     model="gemma-4-31b-it",
                     config=types.GenerateContentConfig(
-                        system_instruction=system_message,
+                        system_instruction=system_message
                     ),
                     contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
                 )
