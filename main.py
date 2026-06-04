@@ -83,6 +83,43 @@ seikaku = """
     誹謗中傷はしない。
     """
 
+def jobX(current_time):
+    system_message = seikaku + "\n現在時刻は" + current_time + "です。\n定期挨拶です。"
+    response = client.models.generate_content(
+        model="gemma-4-26b-a4b-it",
+        config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=1000,
+            temperature=0.0,
+            system_instruction=system_message,
+        ),
+        contents=types.Content(
+            role="user",
+        ),
+    )
+    safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+    mk.notes_create(
+        safe_text,
+        visibility=NoteVisibility.HOME,
+        no_extract_mentions=True,
+    )
+
+def job():
+    current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    jobX(current_time)
+
+schedule.every().day.at(oha).do(job)
+schedule.every().day.at(ohiru).do(job)
+schedule.every().day.at(oyatsu).do(job)
+schedule.every().day.at(yuuhann).do(job)
+schedule.every().day.at(oyasumi).do(job)
+schedule.every().day.at(oyasumi2).do(job)
+
+async def teiki():
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(60)
+
 async def runner():
     async with websockets.connect(WS_URL) as ws:
         await ws.send(
@@ -181,6 +218,9 @@ async def on_note(note):
                 response = client.models.generate_content(
                     model="gemma-4-26b-a4b-it",
                     config=types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                        max_output_tokens=1000,
+                        temperature=0.0,
                         system_instruction=system_message
                     ),
                     contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
@@ -210,7 +250,7 @@ async def on_follow(user):
 
 
 async def main():
-    await asyncio.gather(runner())
+    await asyncio.gather(runner(), teiki())
 
 
 asyncio.run(main())
