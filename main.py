@@ -100,8 +100,6 @@ def jobX(current_time):
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         config=types.GenerateContentConfig(
-            max_output_tokens=1000,
-            temperature=0.0,
             system_instruction=system_message,
         ),
         contents=types.Content(
@@ -229,8 +227,6 @@ async def on_note(note):
                 response = client.models.generate_content(
                     model="gemini-3.1-flash-lite",
                     config=types.GenerateContentConfig(
-                        max_output_tokens=1000,
-                        temperature=0.0,
                         system_instruction=system_message
                     ),
                     contents=history
