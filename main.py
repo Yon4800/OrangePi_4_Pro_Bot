@@ -199,6 +199,27 @@ def run_speedtest_sync():
     return s.results.dict()
 
 
+def build_system_message(user, current_time, action_type="メンション"):
+    user_name = user.get("name") or user.get("username") or "ゲスト"
+    username = user.get("username", "")
+    
+    # ユーザーが管理者（よんぱちさん）であるかどうかを判定
+    is_admin = False
+    if username.lower() in ["yon48", "yon4800"] or "よんぱち" in user_name:
+        is_admin = True
+        
+    system_message = seikaku + f"\n現在時刻は{current_time}です。\n"
+    
+    if is_admin:
+        system_message += f"管理者の「よんぱちさん」（ユーザー名: {user_name}）から{action_type}されました。\n"
+        system_message += "会話相手は管理者のよんぱちさん本人です。相手を『よんぱちさん』（またはお前、あんた等）と呼び、いつものように信頼していない態度で接してください。"
+    else:
+        system_message += f"「{user_name}」という一般ユーザーから{action_type}されました。\n"
+        system_message += f"会話相手は管理者のよんぱちさんとは別人の一般ユーザーです。絶対に相手を『よんぱちさん』と呼んではいけません。相手のことは必ず『{user_name}さん』と呼んでください。ただし、性格設定に基づく高飛車で傲慢な態度や煽りは維持してください。"
+        
+    return system_message
+
+
 async def on_note(note):
     if note.get("mentions"):
         if MY_ID in note["mentions"] and "+LLM" in note["text"]:
@@ -222,7 +243,7 @@ async def on_note(note):
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                 
                 # システムプロンプトを最初に追加
-                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
+                system_message = build_system_message(note["user"], current_time, "メンション")
                 
                 history = []
                 for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
@@ -275,7 +296,7 @@ async def on_note(note):
                 server_sponsor = results.get("server", {}).get("sponsor", "不明")
                 
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方に回線速度の測定を要求されました。"
+                system_message = build_system_message(note["user"], current_time, "回線速度の測定を要求")
                 
                 prompt = f"""
                 回線速度の測定結果は以下の通りです：
