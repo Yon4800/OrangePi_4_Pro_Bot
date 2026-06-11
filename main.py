@@ -7,6 +7,7 @@ import os
 from google import genai
 from google.genai import types
 import schedule
+import speedtest
 from datetime import datetime
 import random
 import re
@@ -190,6 +191,14 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
     return messages
 
 
+def run_speedtest_sync():
+    s = speedtest.Speedtest(secure=True)
+    s.get_best_server()
+    s.download()
+    s.upload()
+    return s.results.dict()
+
+
 async def on_note(note):
     if note.get("mentions"):
         if MY_ID in note["mentions"] and "+LLM" in note["text"]:
@@ -250,6 +259,62 @@ async def on_note(note):
                     no_extract_mentions=True,
                 )
                 print(e)
+        elif MY_ID in note["mentions"] and "+M" in note["text"]:
+            mk.notes_reactions_create(
+                note_id=note["id"], reaction="⏱️"
+            )
+            try:
+                # 非同期スレッドで速度測定を実行
+                results = await asyncio.to_thread(run_speedtest_sync)
+                
+                download_speed = results.get("download", 0) / 1_000_000
+                upload_speed = results.get("upload", 0) / 1_000_000
+                ping = results.get("ping", 0)
+                isp = results.get("client", {}).get("isp", "不明")
+                server_name = results.get("server", {}).get("name", "不明")
+                server_sponsor = results.get("server", {}).get("sponsor", "不明")
+                
+                current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方に回線速度の測定を要求されました。"
+                
+                prompt = f"""
+                回線速度の測定結果は以下の通りです：
+                - ダウンロード速度: {download_speed:.2f} Mbps
+                - アップロード速度: {upload_speed:.2f} Mbps
+                - レイテンシ (Ping): {ping:.1f} ms
+                - 接続プロバイダ: {isp}
+                - 測定サーバー: {server_sponsor} ({server_name})
+
+                この測定結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。
+                """
+                
+                response = client.models.generate_content(
+                    model="gemini-3.1-flash-lite",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_message
+                    ),
+                    contents=types.Content(
+                        role="user", parts=[types.Part(text=prompt)]
+                    ),
+                )
+                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+                
+                mk.notes_create(
+                    text=safe_text,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True,
+                )
+            except Exception as e:
+                print(f"速度測定エラー: {e}")
+                # エラー時もキャラクター性のあるエラー返答をする
+                error_msg = "回線速度を測ろうとしたけれど、測定中にエラーが発生したわ。何やってるんですか、回線管理もろくにできないんですか？？？"
+                mk.notes_create(
+                    text=error_msg,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True,
+                )
 
 
 async def on_follow(user):
@@ -263,4 +328,5 @@ async def main():
     await asyncio.gather(runner(), teiki())
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
