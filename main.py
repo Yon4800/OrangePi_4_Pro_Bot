@@ -225,8 +225,35 @@ def build_system_message(user, current_time, action_type="メンション"):
 
 
 async def on_note(note):
-    if note.get("mentions"):
-        if MY_ID in note["mentions"] and "+LLM" in note["text"]:
+    if note.get("mentions") and MY_ID in note["mentions"]:
+        note_text = note.get("text", "")
+        is_llm = "+LLM" in note_text
+        is_m = "+M" in note_text
+        if not (is_llm or is_m):
+            return
+
+        # Earn OGC from talking to OrangePi 4 Pro
+        try:
+            from shared_economy_helper import load_economy, save_economy, get_user_state
+            econ_data = load_economy()
+            user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
+            username_real = note["user"].get("username", "")
+            user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
+            user_state["balance_ogc"] = round(user_state["balance_ogc"] + 150.0, 2)
+            save_economy(econ_data)
+        except Exception as ex:
+            print(f"Error updating economy in OrangePi 4 Pro: {ex}")
+
+        def reply_note(text):
+            final_text = f"{text}\n(おぱじふぉぷろとお話ししたため、150 OGCを獲得しました！)"
+            mk.notes_create(
+                text=final_text,
+                reply_id=note["id"],
+                visibility=NoteVisibility.HOME,
+                no_extract_mentions=True,
+            )
+
+        if is_llm:
             mk.notes_reactions_create(
                 note_id=note["id"], reaction="🤔"
             )
@@ -271,20 +298,11 @@ async def on_note(note):
                 )
                 safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
                 
-                mk.notes_create(
-                    text=safe_text,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
-                )
+                reply_note(safe_text)
             except Exception as e:
-                mk.notes_create(
-                    "予期せぬエラーが発生した。何やってるんですか、エラーが出ないのは常識ですよね？？？",
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
-                )
+                reply_note("予期せぬエラーが発生した。何やってるんですか、エラーが出ないのは常識ですよね？？？")
                 print(e)
-        elif MY_ID in note["mentions"] and "+M" in note["text"]:
+        elif is_m:
             mk.notes_reactions_create(
                 note_id=note["id"], reaction="⏱️"
             )
@@ -324,22 +342,12 @@ async def on_note(note):
                 )
                 safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
                 
-                mk.notes_create(
-                    text=safe_text,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
-                )
+                reply_note(safe_text)
             except Exception as e:
                 print(f"速度測定エラー: {e}")
                 # エラー時もキャラクター性のあるエラー返答をする
                 error_msg = "回線速度を測ろうとしたけれど、測定中にエラーが発生したわ。何やってるんですか、回線管理もろくにできないんですか？？？"
-                mk.notes_create(
-                    text=error_msg,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True,
-                )
+                reply_note(error_msg)
 
 
 async def on_follow(user):
