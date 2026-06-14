@@ -78,7 +78,7 @@ seikaku = """
     自分になにか手を出したら煽ってきます。
     最近RAM価格高騰の影響でOrangePiの価格が上がっているのに、Radxa Cubie A5Eの価格は少ししか上がらなかったことが悔しいそうです。そのせいでよんぱちさんがRadxa Cubieを推すのがムカつくらしいです。
     ロックスには、気温を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
-    きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
+    きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     MisskeyのBotです。
@@ -100,7 +100,21 @@ oyasumi = "22:00"
 oyasumi2 = "02:00"
 
 def jobX(current_time):
-    system_message = seikaku + "\n現在時刻は" + current_time + "です。"
+    rate_info = ""
+    try:
+        from shared_economy_helper import load_economy
+        econ_data = load_economy()
+        rate_cbc = econ_data["rates"]["CBC"]["current"]
+        rate_ogc = econ_data["rates"]["OGC"]["current"]
+        rate_info = (
+            f"\n【現在の為替レート情報】\n"
+            f"・1 $SBC = {rate_cbc:.2f} CBC\n"
+            f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+        )
+    except Exception as e:
+        print(f"Error loading rates in jobX: {e}")
+
+    system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         config=types.GenerateContentConfig(
@@ -203,7 +217,7 @@ def run_speedtest_sync():
     return s.results.dict()
 
 
-def build_system_message(user, current_time, action_type="メンション"):
+def build_system_message(user, current_time, action_type="メンション", econ_data=None, user_state=None):
     user_name = user.get("name") or user.get("username") or "ゲスト"
     username = user.get("username", "")
     
@@ -212,7 +226,28 @@ def build_system_message(user, current_time, action_type="メンション"):
     if username.lower() in ["yon48", "yon4800"] or "よんぱち" in user_name:
         is_admin = True
         
-    system_message = seikaku + f"\n現在時刻は{current_time}です。\n"
+    coin_info = ""
+    if econ_data and user_state:
+        try:
+            rate_cbc = econ_data["rates"]["CBC"]["current"]
+            rate_ogc = econ_data["rates"]["OGC"]["current"]
+            user_cbc = user_state["balance_cbc"]
+            user_ogc = user_state["balance_ogc"]
+            user_sbc = user_state["balance_sbc"]
+            coin_info = (
+                f"\n【通貨および資産情報】\n"
+                f"・現在の為替レート:\n"
+                f"  1 $SBC = {rate_cbc:.2f} CBC\n"
+                f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                f"・話しかけているユーザー（{user_name}）の資産残高:\n"
+                f"  CBC残高: {user_cbc:.2f} CBC\n"
+                f"  OGC残高: {user_ogc:.2f} OGC\n"
+                f"  $SBC残高: {user_sbc:.2f} $SBC\n"
+            )
+        except Exception as e:
+            print(f"Error building coin info: {e}")
+
+    system_message = seikaku + coin_info + f"\n現在時刻は{current_time}です。\n"
     
     if is_admin:
         system_message += f"管理者の「よんぱちさん」（ユーザー名: {user_name}）から{action_type}されました。\n"
@@ -233,6 +268,8 @@ async def on_note(note):
             return
 
         # Earn OGC from talking to OrangePi 4 Pro
+        econ_data = None
+        user_state = None
         try:
             from shared_economy_helper import load_economy, save_economy, get_user_state
             econ_data = load_economy()
@@ -274,7 +311,7 @@ async def on_note(note):
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                 
                 # システムプロンプトを最初に追加
-                system_message = build_system_message(note["user"], current_time, "メンション")
+                system_message = build_system_message(note["user"], current_time, "メンション", econ_data, user_state)
                 
                 history = []
                 for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
@@ -318,7 +355,7 @@ async def on_note(note):
                 server_sponsor = results.get("server", {}).get("sponsor", "不明")
                 
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                system_message = build_system_message(note["user"], current_time, "回線速度の測定を要求")
+                system_message = build_system_message(note["user"], current_time, "回線速度の測定を要求", econ_data, user_state)
                 
                 prompt = f"""
                 回線速度の測定結果は以下の通りです：
