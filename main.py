@@ -102,14 +102,16 @@ oyasumi2 = "02:00"
 def jobX(current_time):
     rate_info = ""
     try:
-        from shared_economy_helper import load_economy
+        from shared_economy_helper import load_economy, get_recent_rates_history_desc
         econ_data = load_economy()
         rate_cbc = econ_data["rates"]["CBC"]["current"]
         rate_ogc = econ_data["rates"]["OGC"]["current"]
+        history_desc = get_recent_rates_history_desc(limit=5)
         rate_info = (
             f"\n【現在の為替レート情報】\n"
             f"・1 $SBC = {rate_cbc:.2f} CBC\n"
             f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+            f"\n{history_desc}\n"
         )
     except Exception as e:
         print(f"Error loading rates in jobX: {e}")
@@ -229,16 +231,19 @@ def build_system_message(user, current_time, action_type="メンション", econ
     coin_info = ""
     if econ_data and user_state:
         try:
+            from shared_economy_helper import get_recent_rates_history_desc
             rate_cbc = econ_data["rates"]["CBC"]["current"]
             rate_ogc = econ_data["rates"]["OGC"]["current"]
             user_cbc = user_state["balance_cbc"]
             user_ogc = user_state["balance_ogc"]
             user_sbc = user_state["balance_sbc"]
+            history_desc = get_recent_rates_history_desc(limit=5)
             coin_info = (
                 f"\n【通貨および資産情報】\n"
                 f"・現在の為替レート:\n"
                 f"  1 $SBC = {rate_cbc:.2f} CBC\n"
                 f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                f"\n{history_desc}\n"
                 f"・話しかけているユーザー（{user_name}）の資産残高:\n"
                 f"  CBC残高: {user_cbc:.2f} CBC\n"
                 f"  OGC残高: {user_ogc:.2f} OGC\n"
@@ -312,6 +317,17 @@ async def on_note(note):
                 
                 # システムプロンプトを最初に追加
                 system_message = build_system_message(note["user"], current_time, "メンション", econ_data, user_state)
+                rate_rules = (
+                    "\n【会話による為替操作ルール】\n"
+                    "・あなたは会話相手とのやり取りに応じて、あなたの国の通貨（OGC）の為替レートを動かすことができます。\n"
+                    "・あなたが誇らしく思ったり、マウントが取れて嬉しかったり、会話相手があなたをエリートだと認めたり、ライバルのRadxaをけなした場合は、レートを下げて（通貨高／OGC高にして）ください。\n"
+                    "  タグの形式: `[RATE_CHANGE: -X.X]`（例: `[RATE_CHANGE: -2.0]`）を返信メッセージの最後に出力してください。変動幅は -0.5 から -5.0 の間で選んでください。\n"
+                    "・会話相手があなたをバカにしたり、性能の低さを指摘したり、Radxaを褒めたりした場合は、レートを上げて（通貨安／OGC安にして）ください。\n"
+                    "  タグの形式: `[RATE_CHANGE: +X.X]`（例: `[RATE_CHANGE: +2.5]`）を返信メッセージの最後に出力してください。変動幅は +0.5 から +5.0 の間で選んでください。\n"
+                    "・特に変化がない場合は、タグを出力しないでください。\n"
+                    "・タグはメッセージの最後に付与してください（返信時には自動的に削除されます）。"
+                )
+                system_message += rate_rules
                 
                 history = []
                 for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
@@ -333,7 +349,19 @@ async def on_note(note):
                         )
                     ],
                 )
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+                response_text = response.text
+                match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
+                if match:
+                    try:
+                        from shared_economy_helper import apply_rate_change, save_economy
+                        delta = float(match.group(1))
+                        apply_rate_change(econ_data, "OGC", delta)
+                        save_economy(econ_data)
+                        response_text = re.sub(r"\[RATE_CHANGE:\s*[+-]?\d+(?:\.\d+)?\]", "", response_text).strip()
+                    except Exception as e:
+                        print(f"Error applying rate change in OPi 4 Pro general talk: {e}")
+                        
+                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response_text).strip()
                 
                 reply_note(safe_text)
             except Exception as e:
