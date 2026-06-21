@@ -62,6 +62,7 @@ def register_bot(bot_name, mk):
         print(f"Error registering bot: {e}")
 
 RESOLVED_BOTS = {}
+PROCESSED_NOTES = set()
 
 async def resolve_all_bots():
     global RESOLVED_BOTS
@@ -368,6 +369,15 @@ def build_system_message(user, current_time, action_type="メンション", econ
 
 
 async def on_note(note):
+    global PROCESSED_NOTES
+    note_id = note.get("id")
+    if note_id:
+        if note_id in PROCESSED_NOTES:
+            return
+        PROCESSED_NOTES.add(note_id)
+        if len(PROCESSED_NOTES) > 200:
+            PROCESSED_NOTES.clear()
+
     # --- +TALK implementation ---
     note_text = note.get("text") or ""
     is_talk_cmd = "+TALK" in note_text.upper()
