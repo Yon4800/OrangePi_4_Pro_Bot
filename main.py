@@ -11,6 +11,7 @@ import speedtest
 from datetime import datetime
 import random
 import re
+import requests
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -601,6 +602,32 @@ async def on_note(note):
                 # 最後のユーザーメッセージ
                 last_user_message = conversation_messages[-1]["content"]
                 
+                # 画像の取得とダウンロード
+                image_parts = []
+                loop = asyncio.get_running_loop()
+                for file in note.get("files", []):
+                    mime_type = file.get("type", "")
+                    if mime_type.startswith("image/"):
+                        url = file.get("url")
+                        if url:
+                            try:
+                                img_bytes = await loop.run_in_executor(None, lambda u=url: requests.get(u, timeout=10).content)
+                                if img_bytes:
+                                    image_parts.append(
+                                        types.Part.from_bytes(
+                                            data=img_bytes,
+                                            mime_type=mime_type
+                                        )
+                                    )
+                            except Exception as e:
+                                print(f"Error downloading image {url}: {e}")
+
+                last_user_parts = [types.Part(text=last_user_message)] if last_user_message else []
+                if image_parts:
+                    last_user_parts.extend(image_parts)
+                if not last_user_parts:
+                    last_user_parts = [types.Part(text="")]
+
                 response = client.models.generate_content(
                     model="gemini-3.1-flash-lite",
                     config=types.GenerateContentConfig(
@@ -609,7 +636,7 @@ async def on_note(note):
                     contents=history
                     + [
                         types.Content(
-                            role="user", parts=[types.Part(text=last_user_message)]
+                            role="user", parts=last_user_parts
                         )
                     ],
                 )
