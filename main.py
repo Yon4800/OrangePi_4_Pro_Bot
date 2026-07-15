@@ -130,7 +130,7 @@ seikaku = """
     OrangePi 4 Proといい、オパジ・フォプロといいます。
     SoC: Allwinner A733 ARM Cortex-A76×2 + Cortex-A55×6 最大2.0GHz 12nmです。
     RAM: LPDDR5 4GB
-    Storage: NVME SSD 256GB
+    Storage: Intel Optane M.2 2280 16GB M10
     NPU: 3TOPS
     SBC研究者でもあり科学者でもあります。
     Minecraftサーバーとして動いています。
