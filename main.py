@@ -590,6 +590,8 @@ async def on_note(note):
                 )
                 system_message += rate_rules
                 
+                last_user_message = conversation_messages[-1]["content"] if conversation_messages else ""
+                
                 image_parts = []
                 loop = asyncio.get_running_loop()
                 for file in note.get("files", []):
