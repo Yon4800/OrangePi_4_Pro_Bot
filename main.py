@@ -4,24 +4,7 @@ import websockets
 from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
-from google import genai
-from google.genai import types
-import schedule
-import speedtest
-from datetime import datetime
-import random
-import re
-import requests
-
-load_dotenv()
-Token = os.getenv("TOKEN")
-Server = os.getenv("SERVER")
-Apikey = os.getenv("APIKEY")  # Gemini API Key
-mk = Misskey(Server)
-mk.token = Token
-
-# Google Genai クライアント初期化
-client = genai.Client(api_key=Apikey)
+from openrouter_helper import generate_llm_reply
 
 MY_ID = mk.i()["id"]
 MY_USERNAME = mk.i()["username"]
@@ -230,16 +213,10 @@ def jobX(current_time):
         print(f"Error loading rates in jobX: {e}")
 
     system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        config=types.GenerateContentConfig(
-            system_instruction=system_message,
-        ),
-        contents=types.Content(
-            role="user", parts=[types.Part(text="定期投稿の時間だよ！")],
-        ),
+    safe_text = generate_llm_reply(
+        system_instruction=system_message,
+        user_prompt="定期投稿の時間だよ！"
     )
-    safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
     mk.notes_create(
         safe_text,
         visibility=NoteVisibility.HOME,
@@ -514,13 +491,10 @@ async def on_note(note):
         await asyncio.sleep(random.uniform(5.0, 10.0))
         
         try:
-            response = client.models.generate_content(
-                model="gemini-3.1-flash-lite",
-                config=types.GenerateContentConfig(system_instruction=instruction),
-                contents=conversation_messages
+            reply_text = generate_llm_reply(
+                system_instruction=instruction,
+                history=conversation_messages
             )
-            reply_text = response.text.strip()
-            reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
             
             if next_bot:
                 reply_text += f"\nねえ、@{next_bot['username']} はどう思う？ +TALK"
@@ -604,15 +578,6 @@ async def on_note(note):
                 )
                 system_message += rate_rules
                 
-                history = []
-                for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-                
-                # 最後のユーザーメッセージ
-                last_user_message = conversation_messages[-1]["content"]
-                
-                # 画像の取得とダウンロード
                 image_parts = []
                 loop = asyncio.get_running_loop()
                 for file in note.get("files", []):
@@ -623,34 +588,16 @@ async def on_note(note):
                             try:
                                 img_bytes = await loop.run_in_executor(None, lambda u=url: requests.get(u, timeout=10).content)
                                 if img_bytes:
-                                    image_parts.append(
-                                        types.Part.from_bytes(
-                                            data=img_bytes,
-                                            mime_type=mime_type
-                                        )
-                                    )
+                                    image_parts.append((img_bytes, mime_type))
                             except Exception as e:
                                 print(f"Error downloading image {url}: {e}")
 
-                last_user_parts = [types.Part(text=last_user_message)] if last_user_message else []
-                if image_parts:
-                    last_user_parts.extend(image_parts)
-                if not last_user_parts:
-                    last_user_parts = [types.Part(text="")]
-
-                response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_message
-                    ),
-                    contents=history
-                    + [
-                        types.Content(
-                            role="user", parts=last_user_parts
-                        )
-                    ],
+                response_text = generate_llm_reply(
+                    system_instruction=system_message,
+                    user_prompt=last_user_message,
+                    history=conversation_messages[:-1],
+                    image_parts=image_parts
                 )
-                response_text = response.text
                 match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
                 if match:
                     try:
@@ -697,16 +644,10 @@ async def on_note(note):
                 この測定結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。
                 """
                 
-                response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_message
-                    ),
-                    contents=types.Content(
-                        role="user", parts=[types.Part(text=prompt)]
-                    ),
+                safe_text = generate_llm_reply(
+                    system_instruction=system_message,
+                    user_prompt=prompt
                 )
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
                 
                 reply_note(safe_text)
             except Exception as e:
