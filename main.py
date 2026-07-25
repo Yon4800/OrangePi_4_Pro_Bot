@@ -231,7 +231,7 @@ def jobX(current_time):
 
     system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3.5-flash-lite",
         config=types.GenerateContentConfig(
             system_instruction=system_message,
         ),
@@ -515,7 +515,7 @@ async def on_note(note):
         
         try:
             response = client.models.generate_content(
-                model="gemini-3.1-flash-lite",
+                model="gemini-3.5-flash-lite",
                 config=types.GenerateContentConfig(system_instruction=instruction),
                 contents=conversation_messages
             )
@@ -639,7 +639,7 @@ async def on_note(note):
                     last_user_parts = [types.Part(text="")]
 
                 response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash-lite",
                     config=types.GenerateContentConfig(
                         system_instruction=system_message
                     ),
@@ -698,7 +698,7 @@ async def on_note(note):
                 """
                 
                 response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash-lite",
                     config=types.GenerateContentConfig(
                         system_instruction=system_message
                     ),
