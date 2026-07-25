@@ -650,7 +650,9 @@ async def on_note(note):
                         )
                     ],
                 )
-                response_text = response.text
+                response_text = response.text or ""
+                if not response_text:
+                    response_text = "（レスポンスが空になりました。何やってるんですか？）"
                 match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
                 if match:
                     try:
