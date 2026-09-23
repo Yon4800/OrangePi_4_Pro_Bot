@@ -6,11 +6,15 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import schedule
-import speedtest
+try:
+    import speedtest
+except ImportError:
+    speedtest = None
 from datetime import datetime, timedelta
 import random
 import re
 import requests
+from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
 from shared_economy_helper import load_economy, save_economy, apply_rate_change, get_user_state, get_recent_rates_history_desc
@@ -71,7 +75,7 @@ def parse_talk_step(text: str):
             pass
     return 1
 
-def get_designated_bot_for_talk(status, note_text: str) -> Optional[str]:
+def get_designated_bot_for_talk(status, note_text: str):
     """
     +TALK投稿に対して応答・リアクションを担当するボット（唯一の1体）を決定する。
     他のボットは重複応答・重複リアクションを防ぐため即座に無視する。
@@ -288,11 +292,51 @@ async def teiki():
         await asyncio.sleep(60)
 
 def run_speedtest_sync():
-    s = speedtest.Speedtest(secure=True)
-    s.get_best_server()
-    s.download()
-    s.upload()
-    return s.results.dict()
+    if speedtest is None:
+        return None
+    try:
+        s = speedtest.Speedtest(secure=True)
+        s.get_best_server()
+        s.download()
+        s.upload()
+        return s.results.dict()
+    except Exception as e:
+        print(f"Error in speedtest run: {e}")
+        return None
+
+def get_system_monitoring_text() -> str:
+    try:
+        def read_cpu_times():
+            with open("/proc/stat", "r", encoding="utf-8") as f:
+                line = f.readline().strip()
+            values = [int(x) for x in line.split()[1:]]
+            total = sum(values)
+            idle = values[3] + values[4] if len(values) > 4 else values[3]
+            return total, idle
+
+        total1, idle1 = read_cpu_times()
+        import time
+        time.sleep(0.3)
+        total2, idle2 = read_cpu_times()
+        total_delta = total2 - total1
+        idle_delta = idle2 - idle1
+        cpu = 0.0 if total_delta == 0 else round((1.0 - idle_delta / total_delta) * 100.0, 1)
+
+        meminfo = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                key, value = line.split(':', 1)
+                meminfo[key.strip()] = int(value.split()[0])
+
+        total_kb = meminfo.get("MemTotal", 0)
+        avail_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
+        used_kb = total_kb - avail_kb
+        total_mb = round(total_kb / 1024)
+        used_mb = round(used_kb / 1024)
+        mem_percent = round(100.0 * used_kb / total_kb, 1) if total_kb else 0.0
+        return f"CPU使用率: {cpu}%\nRAM使用率: {mem_percent}% ({used_mb}MB / {total_mb}MB)"
+    except Exception:
+        return "CPU/RAM: 正常稼働中"
 
 def build_system_message(user, current_time, action_type="メンション", econ_data=None, user_state=None):
     user_name = user.get("display_name") or user.get("username") or "ゲスト"
@@ -509,6 +553,8 @@ async def on_status(status, is_notification: bool = False):
             history_msgs = get_conversation_history_from_context(status_id)
             user_input = note_text.replace("+LLM", "").strip()
             user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
+            if not user_input:
+                user_input = "こんにちは！お話ししましょう。"
             
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
             system_message = build_system_message(account, current_time, "メンション", econ_data, user_state)
@@ -539,7 +585,6 @@ async def on_status(status, is_notification: bool = False):
             match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
             if match:
                 try:
-                    from shared_economy_helper import apply_rate_change, save_economy
                     delta = float(match.group(1))
                     apply_rate_change(econ_data, "OGC", delta)
                     save_economy(econ_data)
@@ -556,29 +601,46 @@ async def on_status(status, is_notification: bool = False):
     elif is_m:
         mc.react(status_id, emoji="⏱️")
         try:
-            results = await asyncio.to_thread(run_speedtest_sync)
-            save_speedtest_record(results)
+            results = None
+            try:
+                results = await asyncio.wait_for(asyncio.to_thread(run_speedtest_sync), timeout=25.0)
+                if results:
+                    save_speedtest_record(results)
+            except Exception as st_err:
+                print(f"[{BOT_NAME}] Speedtest timed out or errored: {st_err}")
 
-            download_speed = results.get("download", 0) / 1_000_000
-            upload_speed = results.get("upload", 0) / 1_000_000
-            ping = results.get("ping", 0)
-            isp = results.get("client", {}).get("isp", "不明")
-            server_name = results.get("server", {}).get("name", "不明")
-            server_sponsor = results.get("server", {}).get("sponsor", "不明")
-
+            sys_info = get_system_monitoring_text()
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            system_message = build_system_message(account, current_time, "回線速度の測定を要求", econ_data, user_state)
+            system_message = build_system_message(account, current_time, "回線速度およびシステム状態の測定要求", econ_data, user_state)
 
-            prompt = f"""
-            回線速度の測定結果は以下の通りです：
-            - ダウンロード速度: {download_speed:.2f} Mbps
-            - アップロード速度: {upload_speed:.2f} Mbps
-            - レイテンシ (Ping): {ping:.1f} ms
-            - 接続プロバイダ: {isp}
-            - 測定サーバー: {server_sponsor} ({server_name})
+            if results:
+                download_speed = results.get("download", 0) / 1_000_000
+                upload_speed = results.get("upload", 0) / 1_000_000
+                ping = results.get("ping", 0)
+                isp = results.get("client", {}).get("isp", "不明")
+                server_name = results.get("server", {}).get("name", "不明")
+                server_sponsor = results.get("server", {}).get("sponsor", "不明")
 
-            この測定結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。
-            """
+                prompt = f"""
+                測定結果は以下の通りです：
+                【回線速度】
+                - ダウンロード: {download_speed:.2f} Mbps
+                - アップロード: {upload_speed:.2f} Mbps
+                - Ping: {ping:.1f} ms
+                - プロバイダ: {isp} ({server_sponsor} / {server_name})
+                【システムリソース】
+                {sys_info}
+
+                この結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。メンション(@)は本文に含めないでください。
+                """
+            else:
+                prompt = f"""
+                ユーザーから測定要求（+M）がありましたが、外部の速度測定サーバーへの接続が混雑またはタイムアウトしたため、ローカルシステム状態のみ取得できました：
+                【システムリソース】
+                {sys_info}
+
+                OrangePi 4 Proらしく、「回線テストサーバーは混雑してるみたいだけど、私のシステム自体は余裕で完璧に稼働してるわ！」とマウントを取りつつ結果を300文字以内で報告してください。メンション(@)は本文に含めないでください。
+                """
 
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
@@ -588,7 +650,7 @@ async def on_status(status, is_notification: bool = False):
             safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
             reply_status(safe_text)
         except Exception as e:
-            print(f"速度測定エラー: {e}")
+            print(f"速度測定・報告エラー: {e}")
             reply_status("回線速度を測ろうとしたけれど、測定中にエラーが発生したわ。何やってるんですか、回線管理もろくにできないんですか？？？")
 
 def is_recent_status(status, max_age_seconds=300) -> bool:
