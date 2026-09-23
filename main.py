@@ -13,6 +13,7 @@ import re
 import requests
 
 from mastodon_client import MastodonClient, ProcessedStore
+from shared_economy_helper import load_economy, save_economy, apply_rate_change, get_user_state, get_recent_rates_history_desc
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -101,7 +102,6 @@ MY_USERNAME = ""
 def register_bot(bot_name, client_inst):
     global MY_ID, MY_USERNAME
     try:
-        from shared_economy_helper import load_economy, save_economy
         my_info = client_inst.get_me()
         MY_ID = str(my_info["id"])
         MY_USERNAME = my_info["username"]
@@ -139,7 +139,6 @@ async def resolve_all_bots():
         RESOLVED_BOTS[b_name] = {"id": "", "username": uname}
 
     try:
-        from shared_economy_helper import load_economy
         econ_data = load_economy()
         if "bots" in econ_data:
             for b_name, b_info in econ_data["bots"].items():
@@ -219,7 +218,6 @@ def jobX(current_time):
         return
     rate_info = ""
     try:
-        from shared_economy_helper import load_economy, get_recent_rates_history_desc
         econ_data = load_economy()
         rate_cbc = econ_data["rates"]["CBC"]["current"]
         rate_ogc = econ_data["rates"]["OGC"]["current"]
@@ -376,7 +374,6 @@ async def on_status(status, is_notification: bool = False):
         processed_store.add(status_id)
 
         try:
-            from shared_economy_helper import load_economy
             econ_data = load_economy()
         except Exception as e:
             print(f"Error loading economy in OrangePi +TALK: {e}")
@@ -464,7 +461,6 @@ async def on_status(status, is_notification: bool = False):
     econ_data = None
     user_state = None
     try:
-        from shared_economy_helper import load_economy, save_economy, get_user_state
         econ_data = load_economy()
         user_name_real = account.get("display_name") or account.get("username") or "ゲスト"
         username_real = account.get("username", "")
