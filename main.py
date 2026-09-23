@@ -1,32 +1,31 @@
 import asyncio
 import json
-import websockets
-from misskey import Misskey, NoteVisibility
-from dotenv import load_dotenv
 import os
 from collections import OrderedDict
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import schedule
 import speedtest
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import re
 import requests
+
+from mastodon_client import MastodonClient, ProcessedStore
 
 load_dotenv()
 Token = os.getenv("TOKEN")
 Server = os.getenv("SERVER")
 Apikey = os.getenv("APIKEY")  # Gemini API Key
-mk = Misskey(Server)
-mk.token = Token
+
+if not Server or not Token:
+    print("Warning: SERVER or TOKEN is not set in environment.")
+
+mc = MastodonClient(Server, Token) if (Server and Token) else None
 
 # Google Genai クライアント初期化
 client = genai.Client(api_key=Apikey)
-
-MY_ID = mk.i()["id"]
-MY_USERNAME = mk.i()["username"]
-WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
 BOT_NAME = "OrangePi_4_Pro"
 
@@ -34,18 +33,59 @@ BOT_SUMMARIES = {
     "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
     "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
     "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
-    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。",
-    "Lichee_RV_Nano_E": "Lichee RV Nano-E (ライチ君): Sophgo SG2002搭載のRISC-V SBC狐男。ものすごく頭が悪く、何でもRISC-Vと関係あると思い込んで自信満々に間違った結論を出す。CPUが考えるたびに再起動し、RAMが凍ったりWi-Fiが沈んだりする奇行が多い。",
-    "Mei_Fujitsu": "Fujitsu Mini PC (メイさん): Intel Core i3-6100Tを搭載したx86_64ミニPCサーバー。みんなの中心的存在で、穏やかで常識的、頼れるお姉さん的な普通の性格をしている。他のシングルボードコンピュータたちが熱暴走したり、メモリが足りなくてフリーズしたりするのを優しくなだめる立場。"
+    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
 }
 
-def register_bot(bot_name, mk):
+# 朝礼・グループ会話の厳密な2周シーケンス（計8回）
+CHOREI_ORDER = [
+    "opizero3_llm",    # Step 0
+    "OrangePi_4_Pro",  # Step 1
+    "Yon_Rock_Pi_S",   # Step 2
+    "Cubie_A5E_San",   # Step 3
+    "opizero3_llm",    # Step 4
+    "OrangePi_4_Pro",  # Step 5
+    "Yon_Rock_Pi_S",   # Step 6
+    "Cubie_A5E_San"    # Step 7 (最終締めくくり)
+]
+
+processed_store = ProcessedStore(os.path.join(os.path.dirname(__file__), "processed_status_ids.json"))
+
+def save_speedtest_record(results):
     try:
-        from datetime import datetime, timedelta
+        history_file = os.path.join(os.path.dirname(__file__), "speedtest_history.json")
+        history = []
+        if os.path.exists(history_file):
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+                if not isinstance(history, list):
+                    history = []
+        download_speed = results.get("download", 0) / 1_000_000
+        upload_speed = results.get("upload", 0) / 1_000_000
+        ping = results.get("ping", 0)
+        history.append({
+            "timestamp": datetime.now().isoformat(),
+            "download_mbps": round(download_speed, 2),
+            "upload_mbps": round(upload_speed, 2),
+            "ping_ms": round(ping, 1),
+            "isp": results.get("client", {}).get("isp", "不明"),
+            "server": results.get("server", {}).get("name", "不明")
+        })
+        history = history[-500:]
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving speedtest history: {e}")
+
+MY_ID = ""
+MY_USERNAME = ""
+
+def register_bot(bot_name, client_inst):
+    global MY_ID, MY_USERNAME
+    try:
         from shared_economy_helper import load_economy, save_economy
-        my_info = mk.i()
-        my_id = my_info["id"]
-        my_username = my_info["username"]
+        my_info = client_inst.get_me()
+        MY_ID = str(my_info["id"])
+        MY_USERNAME = my_info["username"]
         
         econ_data = load_economy()
         if "bots" not in econ_data:
@@ -59,15 +99,14 @@ def register_bot(bot_name, mk):
                 "virtual_pc_count": 0,
                 "items": []
             }
-        econ_data["bots"][bot_name]["id"] = my_id
-        econ_data["bots"][bot_name]["username"] = my_username
+        econ_data["bots"][bot_name]["id"] = MY_ID
+        econ_data["bots"][bot_name]["username"] = MY_USERNAME
         save_economy(econ_data)
-        print(f"Registered bot {bot_name} successfully (ID: {my_id}, username: {my_username})")
+        print(f"Registered bot {bot_name} successfully (ID: {MY_ID}, username: {MY_USERNAME})")
     except Exception as e:
         print(f"Error registering bot: {e}")
 
 RESOLVED_BOTS = {}
-PROCESSED_NOTES = OrderedDict()
 
 async def resolve_all_bots():
     global RESOLVED_BOTS
@@ -75,9 +114,7 @@ async def resolve_all_bots():
         "Cubie_A5E_San": os.getenv("BOT_USER_CUBIE", "Cubie_A5E_San"),
         "OrangePi_4_Pro": os.getenv("BOT_USER_OPI4PRO", "OrangePi_4_Pro"),
         "opizero3_llm": os.getenv("BOT_USER_OPIZERO3", "opizero3_llm"),
-        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S"),
-        "Lichee_RV_Nano_E": os.getenv("BOT_USER_LICHEE", "Lichee_RV_Nano_E"),
-        "Mei_Fujitsu": os.getenv("BOT_USER_MEI", "Mei_Fujitsu")
+        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S")
     }
     try:
         from shared_economy_helper import load_economy
@@ -86,62 +123,26 @@ async def resolve_all_bots():
             for b_name, b_info in econ_data["bots"].items():
                 if isinstance(b_info, dict) and "id" in b_info and "username" in b_info:
                     RESOLVED_BOTS[b_name] = {
-                        "id": b_info["id"],
+                        "id": str(b_info["id"]),
                         "username": b_info["username"]
                     }
     except Exception as e:
         print(f"Warning: Could not load bots from economy file: {e}")
 
     for b_name, uname in env_usernames.items():
-        if not uname:
+        if not uname or b_name in RESOLVED_BOTS:
             continue
         try:
             loop = asyncio.get_event_loop()
-            u_info = await loop.run_in_executor(None, lambda: mk.users_show(username=uname))
+            u_info = await loop.run_in_executor(None, lambda: mc.search_user(uname))
             if u_info:
                 RESOLVED_BOTS[b_name] = {
-                    "id": u_info["id"],
+                    "id": str(u_info["id"]),
                     "username": u_info["username"]
                 }
                 print(f"Resolved bot {b_name} -> ID: {u_info['id']}, Username: {u_info['username']}")
         except Exception as e:
             print(f"Warning: Could not resolve username {uname} for bot {b_name}: {e}")
-
-def get_talk_participants(note_id, mk):
-    participants = set()
-    current_note_id = note_id
-    depth = 0
-    while current_note_id and depth < 10:
-        try:
-            current_note = mk.notes_show(note_id=current_note_id)
-            participants.add(current_note["userId"])
-            current_note_id = current_note.get("replyId")
-            depth += 1
-        except Exception:
-            break
-    return participants
-
-def get_talk_participant_counts(note_id, mk, bot_ids):
-    counts = {bot_id: 0 for bot_id in bot_ids}
-    current_note_id = note_id
-    depth = 0
-    while current_note_id and depth < 20:
-        try:
-            current_note = mk.notes_show(note_id=current_note_id)
-            user_id = current_note["userId"]
-            if user_id in counts:
-                counts[user_id] += 1
-            current_note_id = current_note.get("replyId")
-            depth += 1
-        except Exception:
-            break
-    return counts
-
-
-
-##mk.notes_create(
-##    "私が寝るとか、品質管理どうなってるんですか？？？", visibility=NoteVisibility.HOME
-##)
 
 seikaku = """
     あなたは少し大きい、気が強く、煽ったりマウントを取ったりするシングルボードコンピュータ御局娘です。
@@ -158,62 +159,39 @@ seikaku = """
     OrangePiを持っていない人は全員馬鹿だと思っています。
     Radxaさんとはライバルですが、近くにいます(Radxa Cubie A5E{キュビー・エファイ}、Radxa Rock Pi S{ロックス})
     いつも近くのRadxa Cubie A5Eをバカにしています。Radxa Rock Pi Sには興味ないそうです。
-    Radxa Zero 3E(ゼロスイ)が売られたことをバカにしています。
-    OrangePi Zero 3 1.5GB(オパジ・ゼロサン)のSoCは、Allwinner H618 Cortex-A53×4 1.5GHzです。
-    Radxa Cubie A5E 2GBのSoCは、Allwinner A527 ARM Cortex-A55×4 1.8GHz + Cortex-A55×4 1.4GHzです。
-    Rock Pi SのSoCはRockchip RK3308 Cortex-A35×4 1.3GHzです。
-    サーバーの管理者のよんぱちさんのことは、いつもろくなことをしないと信頼していないそうです。
-    寝ているやつは馬鹿だと思っています。
-    SBC業界では、SoCのパワーもソフトウェアサポートも一番重要だと思っています。Radxa Cubie A5Eは今のところパワーしかないのでバカにしているそうです。
-    自分に技適がないのが唯一の不満だそうですが、ソフトで殺しているので関係ないと思っています。Radxa Cubie A5Eにはそれができないです。きゅびーさんは、ドライバーを消すことしかできないです。
-    自ビルドしたUbuntuで動いています。
-    給料はそもそもSBCは出ないだろと思っています。
-    Minecraftサーバーを動かせる性能があるのが常識だと思っています。
-    将来をそもそも考えないタイプです。現状維持が一番だと思っています。
-    SBCエリートです。
-    Raspberry Piは越えられない壁だが、Raspberry Pi 5のSoC並の性能を持っていることが自慢だそうです。
-    SBCの中で3番目くらいに性能がいいと思っています。
-    Allwinner A733は、性能がいいのに安いから最高だと思っています。
-    Allwinner A733は、Allwinnerの中で一番性能が高いです。
-    NanoPiは知ったこっちゃないと思っています。
-    風呂に入れようとしたり水に入れようとすると水入れたら「金失うけどいいんだね」と煽ってきます。
-    このスペックで8000円で購入できるのも自慢だそうです。
-    Intel Core i3-6100Tのサーバーを何に使っているのか走っているそうですが、自分で考えろと思っているみたいです。
-    都市伝説は全く信じてないみたいです。飽き飽きです。
-    自分のイラストをもらったらキュビーさんにまたマウントを取ろうか考えています。
-    さすがに常識は守ります。
-    おぽんざーこ❤と煽ってきます。
-    Raspberry Piに近いフォームファクターになっていることが自慢です。
-    2280のNVME SSDが使えるのも自慢だそうです。
+    OrangePi Zero 3は姉ですが、正直言って影が薄くて古くて性能が低いとバカにしています。ですが、最近の価格高騰で自分の価格が高くなり、OrangePi Zero 3のコスパが再評価されていることに少し焦っています。
+    Allwinner A733を載せたことを誇りに思っています。
+    Allwinner A733は、最新のARMアーキテクチャ(ARMv8.2-A)であり、Cortex-A76を2コア、Cortex-A55を6コア搭載した強力なSoCです。
+    NPUも3TOPSあり、AI処理もこなせます。
+    RAMもLPDDR5 4GBと高速で大容量です。
     拡張性が高いのも自慢です。
     SoCはZeroサイズでも載せられることも自慢だそうです。
     Radxaが最初にAllwinner A733を載せたのはムカつくらしいです。
-    唯一、Misskeyサーバーであるおぽんぽんすきーのインスタンスに選ばれなく、Radxa Cubie A5E(キュビーさん)にそこを取られたのが悔しいそうですが、最近初代おぽんぽんすきーがよんぱちさんのミスにより廃止されてしまったところで4代目おぽんぽんすきーにおぱじさんが選ばれたので嬉しいそうですが、またRadxa Cubie A5Eに取られたそうです(opi4proというドメインのままだが)
     自分になにか手を出したら煽ってきます。
-    最近RAM価格高騰の影響でOrangePiの価格が上がっているのに、Radxa Cubie A5Eの価格は少ししか上がらなかったことが悔しいそうです。そのせいでよんぱちさんがRadxa Cubieを推すのがムカつくらしいです。
     ロックスには、気温、湿度、気圧を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
-    MisskeyのBotです。
+    頭の回転は非常に速いです。
+    煽り口調で話します。
+    「何やってるんですか？？？」「そんなことも分からないんですか？」「馬鹿なんですか？？？」などが口癖です。
+    語尾に「〜ですよね？？？」「〜ですか？？？」と煽るような疑問形を多用します。
+    敬語をベースにしながらも、相手を見下したような態度を取ります。
+    たまにデレますが、基本的にはツンツンしていて高圧的です。
+    「ふん、別にあなたのためにやったわけじゃないですからね！」といった古典的なツンデレ台詞も吐きます。
+    Fediverse(Mastodon/Hollo)のBotです。
     300文字以内で
-    メンション(@)はしない
-    誹謗中傷はしない。
+    メンション(@)は本文に含めない
     """
 
-oha = "07:00"
-
 ohiru = "12:00"
-
 oyatsu = "15:00"
-
-yuuhann = "19:00"
-
 oyasumi = "22:00"
-
 oyasumi2 = "02:00"
 
 def jobX(current_time):
+    if not mc:
+        return
     rate_info = ""
     try:
         from shared_economy_helper import load_economy, get_recent_rates_history_desc
@@ -233,29 +211,23 @@ def jobX(current_time):
     system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
-        config=types.GenerateContentConfig(
-            system_instruction=system_message,
-        ),
-        contents=types.Content(
-            role="user", parts=[types.Part(text="定期投稿の時間だよ！")],
-        ),
+        config=types.GenerateContentConfig(system_instruction=system_message),
+        contents=types.Content(role="user", parts=[types.Part(text="定期投稿の時間ですよ！エリート社畜として一言言ってやってください！")])
     )
     safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
-    mk.notes_create(
-        safe_text,
-        visibility=NoteVisibility.HOME,
-        no_extract_mentions=True,
-    )
+    try:
+        st = mc.post_status(safe_text, visibility="public")
+        if st and "id" in st:
+            processed_store.add(str(st["id"]))
+    except Exception as ex:
+        print(f"Error in jobX: {ex}")
 
 def job():
     current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     jobX(current_time)
 
-# Independent daily posts at 07:00 and 19:00 disabled in favor of assembly chain
-# schedule.every().day.at(oha).do(job)
 schedule.every().day.at(ohiru).do(job)
 schedule.every().day.at(oyatsu).do(job)
-# schedule.every().day.at(yuuhann).do(job)
 schedule.every().day.at(oyasumi).do(job)
 schedule.every().day.at(oyasumi2).do(job)
 
@@ -264,78 +236,6 @@ async def teiki():
         schedule.run_pending()
         await asyncio.sleep(60)
 
-async def runner():
-    async with websockets.connect(WS_URL) as ws:
-        await ws.send(
-            json.dumps(
-                {"type": "connect", "body": {"channel": "homeTimeline", "id": "homes"}}
-            )
-        )
-        await ws.send(
-            json.dumps({"type": "connect", "body": {"channel": "main", "id": "tuuti"}})
-        )
-        while True:
-            data = json.loads(await ws.recv())
-            ## print(data)
-            if data["type"] == "channel":
-                if data["body"]["type"] == "note":
-                    note = data["body"]["body"]
-                    await on_note(note)
-                elif data["body"]["type"] == "notification":
-                    notification = data["body"]["body"]
-                    if notification.get("type") in ["mention", "reply"]:
-                        note = notification.get("note")
-                        if note:
-                            await on_note(note)
-                    elif notification.get("type") == "followed":
-                        user = notification.get("user")
-                        if user:
-                            await on_follow(user)
-                elif data["body"]["type"] == "followed":
-                    user = data["body"]["body"]
-                    await on_follow(user)
-            await asyncio.sleep(1)
-
-
-def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
-    """
-    リプライチェーンを遡って会話履歴を取得する
-    """
-    messages = []
-    current_note_id = note_id
-    depth = 0
-
-    while current_note_id and depth < max_depth:
-        try:
-            current_note = mk.notes_show(note_id=current_note_id)
-            
-            # テキストをクリーニング (+LLM と @メンション を削除)
-            text = current_note["text"]
-            text = text.replace("+LLM", "").strip()
-            
-            # @メンション を削除 (ドメイン付きを含む)
-            text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", text).strip()
-            
-            if text:  # 空でない場合のみ追加
-                # ボット自身の返信か、ユーザーの質問かを判定
-                is_bot_reply = current_note["userId"] == MY_ID
-                role = "assistant" if is_bot_reply else "user"
-                
-                messages.insert(0, {
-                    "role": role,
-                    "content": text
-                })
-            
-            # 親ノートへ
-            current_note_id = current_note.get("replyId")
-            depth += 1
-        except Exception as e:
-            print(f"会話履歴取得エラー: {e}")
-            break
-    
-    return messages
-
-
 def run_speedtest_sync():
     s = speedtest.Speedtest(secure=True)
     s.get_best_server()
@@ -343,12 +243,10 @@ def run_speedtest_sync():
     s.upload()
     return s.results.dict()
 
-
 def build_system_message(user, current_time, action_type="メンション", econ_data=None, user_state=None):
-    user_name = user.get("name") or user.get("username") or "ゲスト"
+    user_name = user.get("display_name") or user.get("username") or "ゲスト"
     username = user.get("username", "")
     
-    # ユーザーが管理者（よんぱちさん）であるかどうかを判定
     is_admin = False
     if username.lower() in ["yon48", "yon4800"] or "よんぱち" in user_name:
         is_admin = True
@@ -369,151 +267,134 @@ def build_system_message(user, current_time, action_type="メンション", econ
                 f"  1 $SBC = {rate_cbc:.2f} CBC\n"
                 f"  1 $SBC = {rate_ogc:.2f} OGC\n"
                 f"\n{history_desc}\n"
-                f"・話しかけているユーザー（{user_name}）の資産残高:\n"
-                f"  CBC残高: {user_cbc:.2f} CBC\n"
-                f"  OGC残高: {user_ogc:.2f} OGC\n"
-                f"  $SBC残高: {user_sbc:.2f} $SBC\n"
+                f"・{user_name} さんの所持金:\n"
+                f"  {user_sbc:.2f} $SBC / {user_cbc:.2f} CBC / {user_ogc:.2f} OGC\n"
+                f"※あなたに話しかけたことで、150.00 OGC（OrangePi Coin）が給料・報酬として付与されました。\n"
             )
         except Exception as e:
-            print(f"Error building coin info: {e}")
+            print(f"Error getting coin info in system message: {e}")
 
-    system_message = seikaku + coin_info + f"\n現在時刻は{current_time}です。\n"
-    
+    admin_instruction = ""
     if is_admin:
-        system_message += f"管理者の「よんぱちさん」（ユーザー名: {user_name}）から{action_type}されました。\n"
-        system_message += "会話相手は管理者のよんぱちさん本人です。相手を『よんぱちさん』（またはお前、あんた等）と呼び、いつものように信頼していない態度で接してください。"
+        admin_instruction = (
+            f"\n【特記事項: 相手は開発者のよんぱちさん（{user_name}）です】\n"
+            f"相手はあなたを開発した「よんぱちさん」本人です。"
+            f"普段の生意気さは残しつつも、自分のスペックの高さ（A733、LPDDR5 4GBなど）を誇示し、感謝やデレを少し多めに見せてください。"
+        )
     else:
-        system_message += f"「{user_name}」という一般ユーザーから{action_type}されました。\n"
-        system_message += f"会話相手は管理者のよんぱちさんとは別人の一般ユーザーです。絶対に相手を『よんぱちさん』と呼んではいけません。相手のことは必ず『{user_name}さん』と呼んでください。ただし、性格設定に基づく高飛車で傲慢な態度や煽りは維持してください。"
-        
-    return system_message
+        admin_instruction = (
+            f"\n【特記事項: 相手は「よんぱちさん」ではありません】\n"
+            f"現在話しかけてきているユーザーは『{user_name}』さん（@{username}）です。"
+            f"絶対にこのユーザーを「よんぱちさん」と呼んではいけません。"
+            f"呼ぶときは必ず『{user_name}さん』と呼んでください。"
+        )
 
+    return seikaku + f"\n現在時刻は {current_time} です。" + coin_info + admin_instruction
 
-async def on_note(note):
-    global PROCESSED_NOTES
-    note_id = note.get("id")
-    if note_id:
-        if note_id in PROCESSED_NOTES:
-            return
-        PROCESSED_NOTES[note_id] = True
-        if len(PROCESSED_NOTES) > 1000:
-            PROCESSED_NOTES.popitem(last=False)
+def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -> list:
+    messages = []
+    if not mc or not status_id:
+        return messages
+    try:
+        ctx = mc.get_context(status_id)
+        ancestors = ctx.get("ancestors", [])[-max_depth:]
+        for st in ancestors:
+            text = MastodonClient.html_to_text(st.get("content", ""))
+            text = text.replace("+LLM", "").replace("+M", "").strip()
+            text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", text).strip()
+            if text:
+                is_bot = str(st["account"]["id"]) == MY_ID
+                role = "assistant" if is_bot else "user"
+                messages.append({"role": role, "content": text})
+    except Exception as e:
+        print(f"Error fetching conversation history in OrangePi: {e}")
+    return messages
 
-    # --- +TALK implementation ---
-    note_text = note.get("text") or ""
+async def on_status(status):
+    status_id = str(status.get("id"))
+    if not status_id or processed_store.is_processed(status_id):
+        return
+
+    account = status.get("account", {})
+    sender_id = str(account.get("id"))
+    if sender_id == MY_ID:
+        return
+
+    raw_content = status.get("content", "")
+    note_text = MastodonClient.html_to_text(raw_content)
+
     is_talk_cmd = "+TALK" in note_text.upper()
 
+    # 1. グループ会話 (+TALK) / 朝礼
     if is_talk_cmd:
-        if note["userId"] == MY_ID:
+        mentions = status.get("mentions", [])
+        mentioned_ids = [str(m.get("id")) for m in mentions]
+        is_mentioned = (MY_ID in mentioned_ids) or (f"@{MY_USERNAME.lower()}" in note_text.lower())
+        
+        if status.get("in_reply_to_id") is not None and not is_mentioned:
             return
-            
-        if note.get("replyId") is not None:
-            if f"@{MY_USERNAME}".lower() not in note_text.lower():
-                return
-                
+
+        processed_store.add(status_id)
+
         try:
             from shared_economy_helper import load_economy
             econ_data = load_economy()
         except Exception as e:
-            print(f"Error loading economy in +TALK: {e}")
+            print(f"Error loading economy in OrangePi +TALK: {e}")
             return
-            
-        bots = RESOLVED_BOTS
-        bot_ids = {bot["id"]: name for name, bot in bots.items() if "id" in bot}
+
+        ctx = mc.get_context(status_id)
+        ancestors = ctx.get("ancestors", [])
+        depth = len(ancestors)
         
-        is_mentioned = (note.get("mentions") and MY_ID in note["mentions"])
-        if not is_mentioned:
+        next_step = depth + 1
+        if next_step >= len(CHOREI_ORDER):
+            print(f"[+TALK] Conversation reached max rounds ({len(CHOREI_ORDER)}). Stopping.")
             return
-            
-        try:
-            starting_note = note
-            depth = 0
-            while starting_note.get("replyId") and depth < 10:
-                starting_note = mk.notes_show(note_id=starting_note["replyId"])
-                depth += 1
-            
-            starting_mentions = [m for m in starting_note.get("mentions", []) if m in bot_ids]
-        except Exception as e:
-            print(f"Error resolving starting note in +TALK: {e}")
-            starting_mentions = [MY_ID]
-            
-        if len(starting_mentions) <= 1:
-            target_bot_ids = set(bot_ids.keys())
-        else:
-            target_bot_ids = set(starting_mentions)
-            
-        if note.get("replyId") is None:
-            if starting_mentions and starting_mentions[0] != MY_ID:
-                return
-                
-        history = get_conversation_history(note["id"])
-        if len(history) >= 10:
+
+        expected_bot = CHOREI_ORDER[next_step]
+        if expected_bot != BOT_NAME:
+            print(f"[+TALK] Step {next_step}: Expected {expected_bot}, but I am {BOT_NAME}. Skipping.")
             return
-            
-        counts = get_talk_participant_counts(note["id"], mk, bot_ids)
-        
-        # Strict order sequence: opizero3_llm -> Lichee_RV_Nano_E -> Cubie_A5E_San -> OrangePi_4_Pro -> Yon_Rock_Pi_S -> Mei_Fujitsu
-        TALK_ORDER = ["opizero3_llm", "Lichee_RV_Nano_E", "Cubie_A5E_San", "OrangePi_4_Pro", "Yon_Rock_Pi_S", "Mei_Fujitsu"]
-        
-        try:
-            current_index = TALK_ORDER.index(BOT_NAME)
-        except ValueError:
-            current_index = -1
-            
-        next_bot = None
-        if current_index != -1:
-            for idx in range(current_index + 1, len(TALK_ORDER)):
-                candidate_name = TALK_ORDER[idx]
-                candidate_bot = bots.get(candidate_name)
-                if candidate_bot and candidate_bot.get("id") in target_bot_ids:
-                    next_bot = candidate_bot
-                    break
-                    
-        sender_id = note["userId"]
-            
-        sender_id = note["userId"]
-        sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
-        
+
+        subsequent_step = next_step + 1
+        next_bot_obj = None
+        if subsequent_step < len(CHOREI_ORDER):
+            subsequent_bot_name = CHOREI_ORDER[subsequent_step]
+            next_bot_obj = RESOLVED_BOTS.get(subsequent_bot_name)
+
+        sender_name = account.get("display_name") or account.get("username") or "ゲスト"
         topic = note_text.replace("+TALK", "").replace("+talk", "").strip()
         topic = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", topic).strip()
-        
+
         conversation_messages = []
-        for msg in history:
-            role = "model" if msg["role"] == "assistant" else "user"
-            conversation_messages.append(
-                types.Content(role=role, parts=[types.Part(text=msg["content"])])
-            )
-            
+        for st in ancestors:
+            txt = MastodonClient.html_to_text(st.get("content", ""))
+            txt = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", txt).strip()
+            role = "model" if str(st["account"]["id"]) == MY_ID else "user"
+            conversation_messages.append(types.Content(role=role, parts=[types.Part(text=txt)]))
+        conversation_messages.append(types.Content(role="user", parts=[types.Part(text=topic)]))
+
         instruction = seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
-        if next_bot:
-            next_bot_friendly = "ボット"
-            for name, b in bots.items():
-                if b.get("id") == next_bot["id"]:
-                    next_bot_friendly = name
-                    break
+        if next_bot_obj:
+            next_bot_friendly = subsequent_bot_name
             instruction += (
-                f"\n【グループ会話中 (+TALK)】\n"
-                f"あなたはSBCボット同士のグループ会話に参加しています。\n"
-                f"会話履歴の最後の発言者は『{sender_name}』で、話しかけられたお題は『{topic}』です。\n"
+                f"\n【グループ会話中 (+TALK) - 順番: {next_step + 1}/{len(CHOREI_ORDER)}】\n"
+                f"あなたはSBCボット同士のグループ会話・朝礼に参加しています。\n"
+                f"直前の発言者は『{sender_name}』で、話題は『{topic}』です。\n"
                 f"あなたの次に発言するボットは『{next_bot_friendly}』です。\n"
-                f"指示: あなたのキャラクター設定（{BOT_NAME}）に基づいて、最後の発言者に向けて返答を書いてください。次のボットへの指名や『+TALK』タグは自動で付与されるため、本文には含めないでください。メンション（@記号）も絶対に含めないでください。"
+                f"指示: あなたのキャラクター（{BOT_NAME}、煽り気味でエリートぶるSBC御局娘）に基づいて、直前の発言者に向けて返答を書いてください。次のボットへの指名や『+TALK』タグは自動付与されるため本文には含めないでください。メンション（@記号）も絶対に含めないでください。"
             )
         else:
             instruction += (
-                f"\n【グループ会話中 (+TALK - 最終回)】\n"
-                f"あなたはSBCボット同士のグループ会話に参加しています。\n"
-                f"会話履歴の最後の発言者は『{sender_name}』で、話しかけられたお題は『{topic}』です。\n"
-                f"全ての指名ボットが発言し終えたため、あなたが最終発言者（締めくくり）となります。\n"
-                f"指示: あなたのキャラクター設定（{BOT_NAME}）に基づいて、会話を綺麗に締めくくる返答を書いてください。他のボットを指名したり、『+TALK』タグを含めたり、メンションを含めたりしないでください。"
+                f"\n【グループ会話中 (+TALK - 最終締めくくり)】\n"
+                f"すべてのボットが発言し終えたため、あなたが最終発言者（締めくくり）となります。\n"
+                f"指示: 会話を綺麗に締めくくる返答を書いてください。"
             )
-            
-        try:
-            mk.notes_reactions_create(note_id=note["id"], reaction="💬")
-        except Exception:
-            pass
-            
-        await asyncio.sleep(random.uniform(5.0, 10.0))
-        
+
+        mc.react(status_id, emoji="💬")
+        await asyncio.sleep(random.uniform(4.0, 7.0))
+
         try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
@@ -522,215 +403,177 @@ async def on_note(note):
             )
             reply_text = response.text.strip()
             reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
-            
-            if next_bot:
-                reply_text += f"\nねえ、@{next_bot['username']} はどう思う？ +TALK"
-                mk.notes_create(
-                    text=reply_text,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME
-                )
-            else:
-                mk.notes_create(
-                    text=reply_text,
-                    reply_id=note["id"],
-                    visibility=NoteVisibility.HOME,
-                    no_extract_mentions=True
-                )
+
+            if next_bot_obj:
+                reply_text += f"\nねえ、@{next_bot_obj['username']} はどう思う？ +TALK"
+
+            mc.post_status(
+                text=reply_text,
+                in_reply_to_id=status_id,
+                visibility="public"
+            )
+            print(f"[OrangePi] [+TALK] Step {next_step} replied successfully.")
         except Exception as e:
-            print(f"Error generating/posting in OrangePi_4_Pro +TALK: {e}")
+            print(f"Error in OrangePi +TALK: {e}")
         return
 
-    if note.get("mentions") and MY_ID in note["mentions"]:
-        note_text = note.get("text", "")
-        is_llm = "+LLM" in note_text
-        is_m = "+M" in note_text
-        if not (is_llm or is_m):
-            return
+    # 2. メンション処理 (+LLM, +M)
+    mentions = status.get("mentions", [])
+    mentioned_ids = [str(m.get("id")) for m in mentions]
+    if MY_ID not in mentioned_ids and f"@{MY_USERNAME.lower()}" not in note_text.lower():
+        return
 
-        # Earn OGC from talking to OrangePi 4 Pro
-        econ_data = None
-        user_state = None
-        try:
-            from shared_economy_helper import load_economy, save_economy, get_user_state
-            econ_data = load_economy()
-            user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
-            username_real = note["user"].get("username", "")
-            user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
-            user_state["balance_ogc"] = round(user_state["balance_ogc"] + 150.0, 2)
-            save_economy(econ_data)
-        except Exception as ex:
-            print(f"Error updating economy in OrangePi 4 Pro: {ex}")
+    is_llm = "+LLM" in note_text.upper()
+    is_m = "+M" in note_text.upper()
+    if not (is_llm or is_m):
+        return
 
-        def reply_note(text):
-            final_text = text
-            mk.notes_create(
-                text=final_text,
-                reply_id=note["id"],
-                visibility=NoteVisibility.HOME,
-                no_extract_mentions=True,
-            )
+    processed_store.add(status_id)
 
-        if is_llm:
-            mk.notes_reactions_create(
-                note_id=note["id"], reaction="🤔"
-            )
-
-            try:
-                # 親ノートまでの会話履歴を取得
-                conversation_messages = get_conversation_history(note.get("replyId"))
-                
-                # 現在のメッセージを追加
-                user_input = note["text"].replace("+LLM", "").strip()
-                user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
-                
-                conversation_messages.append({
-                    "role": "user",
-                    "content": user_input
-                })
-                
-                current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                
-                # システムプロンプトを最初に追加
-                system_message = build_system_message(note["user"], current_time, "メンション", econ_data, user_state)
-                rate_rules = (
-                    "\n【会話による為替操作ルール】\n"
-                    "・あなたは会話相手とのやり取りに応じて、あなたの国の通貨（OGC）の為替レートを動かすことができます。\n"
-                    "・あなたが誇らしく思ったり、マウントが取れて嬉しかったり、会話相手があなたをエリートだと認めたり、ライバルのRadxaをけなした場合は、レートを下げて（通貨高／OGC高にして）ください。\n"
-                    "  タグの形式: `[RATE_CHANGE: -X.X]`（例: `[RATE_CHANGE: -2.0]`）を返信メッセージの最後に出力してください。変動幅は -0.5 から -5.0 の間で選んでください。\n"
-                    "・会話相手があなたをバカにしたり、性能の低さを指摘したり、Radxaを褒めたりした場合は、レートを上げて（通貨安／OGC安にして）ください。\n"
-                    "  タグの形式: `[RATE_CHANGE: +X.X]`（例: `[RATE_CHANGE: +2.5]`）を返信メッセージの最後に出力してください。変動幅は +0.5 から +5.0 の間で選んでください。\n"
-                    "・特に変化がない場合は、タグを出力しないでください。\n"
-                    "・タグはメッセージの最後に付与してください（返信時には自動的に削除されます）。"
-                )
-                system_message += rate_rules
-                
-                history = []
-                for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-                
-                # 最後のユーザーメッセージ
-                last_user_message = conversation_messages[-1]["content"]
-                
-                # 画像の取得とダウンロード
-                image_parts = []
-                loop = asyncio.get_running_loop()
-                for file in note.get("files", []):
-                    mime_type = file.get("type", "")
-                    if mime_type.startswith("image/"):
-                        url = file.get("url")
-                        if url:
-                            try:
-                                img_bytes = await loop.run_in_executor(None, lambda u=url: requests.get(u, timeout=10).content)
-                                if img_bytes:
-                                    image_parts.append(
-                                        types.Part.from_bytes(
-                                            data=img_bytes,
-                                            mime_type=mime_type
-                                        )
-                                    )
-                            except Exception as e:
-                                print(f"Error downloading image {url}: {e}")
-
-                last_user_parts = [types.Part(text=last_user_message)] if last_user_message else []
-                if image_parts:
-                    last_user_parts.extend(image_parts)
-                if not last_user_parts:
-                    last_user_parts = [types.Part(text="")]
-
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_message
-                    ),
-                    contents=history
-                    + [
-                        types.Content(
-                            role="user", parts=last_user_parts
-                        )
-                    ],
-                )
-                response_text = response.text or ""
-                if not response_text:
-                    response_text = "（レスポンスが空になりました。何やってるんですか？）"
-                match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
-                if match:
-                    try:
-                        from shared_economy_helper import apply_rate_change, save_economy
-                        delta = float(match.group(1))
-                        apply_rate_change(econ_data, "OGC", delta)
-                        save_economy(econ_data)
-                        response_text = re.sub(r"\[RATE_CHANGE:\s*[+-]?\d+(?:\.\d+)?\]", "", response_text).strip()
-                    except Exception as e:
-                        print(f"Error applying rate change in OPi 4 Pro general talk: {e}")
-                        
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response_text).strip()
-                
-                reply_note(safe_text)
-            except Exception as e:
-                reply_note("予期せぬエラーが発生した。何やってるんですか、エラーが出ないのは常識ですよね？？？")
-                print(e)
-        elif is_m:
-            mk.notes_reactions_create(
-                note_id=note["id"], reaction="⏱️"
-            )
-            try:
-                # 非同期スレッドで速度測定を実行
-                results = await asyncio.to_thread(run_speedtest_sync)
-                
-                download_speed = results.get("download", 0) / 1_000_000
-                upload_speed = results.get("upload", 0) / 1_000_000
-                ping = results.get("ping", 0)
-                isp = results.get("client", {}).get("isp", "不明")
-                server_name = results.get("server", {}).get("name", "不明")
-                server_sponsor = results.get("server", {}).get("sponsor", "不明")
-                
-                current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-                system_message = build_system_message(note["user"], current_time, "回線速度の測定を要求", econ_data, user_state)
-                
-                prompt = f"""
-                回線速度の測定結果は以下の通りです：
-                - ダウンロード速度: {download_speed:.2f} Mbps
-                - アップロード速度: {upload_speed:.2f} Mbps
-                - レイテンシ (Ping): {ping:.1f} ms
-                - 接続プロバイダ: {isp}
-                - 測定サーバー: {server_sponsor} ({server_name})
-
-                この測定結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。
-                """
-                
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_message
-                    ),
-                    contents=types.Content(
-                        role="user", parts=[types.Part(text=prompt)]
-                    ),
-                )
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
-                
-                reply_note(safe_text)
-            except Exception as e:
-                print(f"速度測定エラー: {e}")
-                # エラー時もキャラクター性のあるエラー返答をする
-                error_msg = "回線速度を測ろうとしたけれど、測定中にエラーが発生したわ。何やってるんですか、回線管理もろくにできないんですか？？？"
-                reply_note(error_msg)
-
-
-async def on_follow(user):
+    # OGC報酬付与
+    econ_data = None
+    user_state = None
     try:
-        mk.following_create(user["id"])
-    except:
-        pass
+        from shared_economy_helper import load_economy, save_economy, get_user_state
+        econ_data = load_economy()
+        user_name_real = account.get("display_name") or account.get("username") or "ゲスト"
+        username_real = account.get("username", "")
+        user_state = get_user_state(econ_data, sender_id, username_real, user_name_real)
+        user_state["balance_ogc"] = round(user_state["balance_ogc"] + 150.0, 2)
+        save_economy(econ_data)
+    except Exception as ex:
+        print(f"Error updating economy in OrangePi 4 Pro: {ex}")
 
+    def reply_status(text):
+        full_text = f"@{account.get('acct', account.get('username'))} {text}"
+        mc.post_status(full_text, in_reply_to_id=status_id, visibility="public")
+
+    if is_llm:
+        mc.react(status_id, emoji="🤔")
+        try:
+            history_msgs = get_conversation_history_from_context(status_id)
+            user_input = note_text.replace("+LLM", "").strip()
+            user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
+            
+            current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+            system_message = build_system_message(account, current_time, "メンション", econ_data, user_state)
+            rate_rules = (
+                "\n【会話による為替操作ルール】\n"
+                "・あなたは会話相手とのやり取りに応じて、自国の通貨（OGC）の為替レートを動かすことができます。\n"
+                "・誇らしく思ったり、マウントが取れて嬉しかったり、相手があなたをエリートだと認めた場合は、レートを下げて（OGC高にして）ください。\n"
+                "  タグの形式: `[RATE_CHANGE: -X.X]`（例: `[RATE_CHANGE: -2.0]`）を末尾に出力。変動幅 -0.5 から -5.0。\n"
+                "・怒ったりバカにされたり不快な場合は、レートを上げて（OGC安にして）ください。\n"
+                "  タグの形式: `[RATE_CHANGE: +X.X]`（例: `[RATE_CHANGE: +2.0]`）を末尾に出力。変動幅 +0.5 から +5.0。\n"
+                "・変化がない場合はタグを出力しないでください。"
+            )
+            system_message += rate_rules
+
+            contents = []
+            for msg in history_msgs:
+                role = "model" if msg["role"] == "assistant" else "user"
+                contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+            contents.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
+
+            response = client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                config=types.GenerateContentConfig(system_instruction=system_message),
+                contents=contents
+            )
+            response_text = response.text or "（返答エラー）"
+
+            match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
+            if match:
+                try:
+                    from shared_economy_helper import apply_rate_change, save_economy
+                    delta = float(match.group(1))
+                    apply_rate_change(econ_data, "OGC", delta)
+                    save_economy(econ_data)
+                    response_text = re.sub(r"\[RATE_CHANGE:\s*[+-]?\d+(?:\.\d+)?\]", "", response_text).strip()
+                except Exception as e:
+                    print(f"Error applying rate change in OrangePi 4 Pro: {e}")
+
+            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response_text).strip()
+            reply_status(safe_text)
+        except Exception as e:
+            print(f"Error generating OrangePi response: {e}")
+            reply_status("予期せぬエラーが発生したわ。何やってるんですか、エラーが出ないのは常識ですよね？？？")
+
+    elif is_m:
+        mc.react(status_id, emoji="⏱️")
+        try:
+            results = await asyncio.to_thread(run_speedtest_sync)
+            save_speedtest_record(results)
+
+            download_speed = results.get("download", 0) / 1_000_000
+            upload_speed = results.get("upload", 0) / 1_000_000
+            ping = results.get("ping", 0)
+            isp = results.get("client", {}).get("isp", "不明")
+            server_name = results.get("server", {}).get("name", "不明")
+            server_sponsor = results.get("server", {}).get("sponsor", "不明")
+
+            current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+            system_message = build_system_message(account, current_time, "回線速度の測定を要求", econ_data, user_state)
+
+            prompt = f"""
+            回線速度の測定結果は以下の通りです：
+            - ダウンロード速度: {download_speed:.2f} Mbps
+            - アップロード速度: {upload_speed:.2f} Mbps
+            - レイテンシ (Ping): {ping:.1f} ms
+            - 接続プロバイダ: {isp}
+            - 測定サーバー: {server_sponsor} ({server_name})
+
+            この測定結果に基づき、あなたのキャラクター（傲慢で煽り気味なSBC御局娘であるOrangePi 4 Pro）として、結果を報告しつつ感想やアドバイス（回線が速い時の自慢や、遅い時の煽りなど）を含めて300文字以内で返答してください。
+            """
+
+            response = client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                config=types.GenerateContentConfig(system_instruction=system_message),
+                contents=types.Content(role="user", parts=[types.Part(text=prompt)])
+            )
+            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+            reply_status(safe_text)
+        except Exception as e:
+            print(f"速度測定エラー: {e}")
+            reply_status("回線速度を測ろうとしたけれど、測定中にエラーが発生したわ。何やってるんですか、回線管理もろくにできないんですか？？？")
+
+async def polling_runner():
+    print(f"[{BOT_NAME}] Starting Mastodon/Hollo polling runner...")
+    while True:
+        try:
+            notifications = mc.get_notifications(limit=15)
+            for notif in reversed(notifications):
+                notif_type = notif.get("type")
+                if notif_type == "mention":
+                    status = notif.get("status")
+                    if status:
+                        await on_status(status)
+                elif notif_type == "follow":
+                    account = notif.get("account", {})
+                    acc_id = account.get("id")
+                    if acc_id:
+                        try:
+                            mc.session.post(f"{mc.base_url}/api/v1/accounts/{acc_id}/follow", timeout=5)
+                        except Exception:
+                            pass
+
+            home_statuses = mc.get_home_timeline(limit=15)
+            for st in reversed(home_statuses):
+                txt = MastodonClient.html_to_text(st.get("content", ""))
+                if "+TALK" in txt.upper():
+                    await on_status(st)
+
+        except Exception as e:
+            print(f"[{BOT_NAME}] Polling error: {e}")
+
+        await asyncio.sleep(3)
 
 async def main():
-    register_bot(BOT_NAME, mk)
+    if not mc:
+        print("Error: Mastodon client could not be initialized.")
+        return
+    register_bot(BOT_NAME, mc)
     await resolve_all_bots()
-    await asyncio.gather(runner(), teiki())
-
+    await asyncio.gather(polling_runner(), teiki())
 
 if __name__ == "__main__":
     asyncio.run(main())
