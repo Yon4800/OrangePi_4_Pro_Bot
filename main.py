@@ -223,8 +223,7 @@ seikaku = """
     拡張性が高いのも自慢です。
     SoCはZeroサイズでも載せられることも自慢だそうです。
     Radxaが最初にAllwinner A733を載せたのはムカつくらしいです。
-    自分になにか手を出したら煽ってきます。
-    ロックスには、気温、湿度、気圧を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能もあります。
+    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -410,6 +409,11 @@ async def on_status(status, is_notification: bool = False):
     if not status_id or processed_store.is_processed(status_id):
         return
 
+    # リノート（ブースト/Reblog）は+TALKやコマンドのトリガーにしない（二重起動防止）
+    if status.get("reblog") is not None:
+        processed_store.add(status_id)
+        return
+
     account = status.get("account", {})
     sender_id = str(account.get("id"))
     if sender_id == MY_ID:
@@ -551,10 +555,14 @@ async def on_status(status, is_notification: bool = False):
         mc.react(status_id, emoji="🤔")
         try:
             history_msgs = get_conversation_history_from_context(status_id)
+            image_parts = MastodonClient.extract_media_parts(status)
             user_input = note_text.replace("+LLM", "").strip()
             user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
             if not user_input:
-                user_input = "こんにちは！お話ししましょう。"
+                if image_parts:
+                    user_input = "この画像を見て感想を言ってください！"
+                else:
+                    user_input = "こんにちは！お話ししましょう。"
             
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
             system_message = build_system_message(account, current_time, "メンション", econ_data, user_state)
@@ -573,7 +581,10 @@ async def on_status(status, is_notification: bool = False):
             for msg in history_msgs:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-            contents.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
+            user_parts = [types.Part(text=user_input)]
+            if image_parts:
+                user_parts.extend(image_parts)
+            contents.append(types.Content(role="user", parts=user_parts))
 
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
@@ -707,11 +718,17 @@ async def polling_runner():
             notifications = mc.get_notifications(limit=10)
             for notif in reversed(notifications):
                 notif_type = notif.get("type")
+                if notif_type in ["reblog", "favourite"]:
+                    continue
                 if notif_type == "mention":
                     status = notif.get("status")
                     if status:
                         sid = str(status.get("id"))
                         if not sid or processed_store.is_processed(sid):
+                            continue
+                        # リノートは処理しない
+                        if status.get("reblog") is not None:
+                            processed_store.add(sid)
                             continue
                         if not is_recent_status(status, max_age_seconds=300):
                             processed_store.add(sid)
@@ -736,6 +753,11 @@ async def polling_runner():
                 if not sid or sid in seen_ids or processed_store.is_processed(sid):
                     continue
                 seen_ids.add(sid)
+
+                # リノート（ブースト）は処理しない（二重起動防止）
+                if st.get("reblog") is not None:
+                    processed_store.add(sid)
+                    continue
 
                 if not is_recent_status(st, max_age_seconds=300):
                     processed_store.add(sid)
