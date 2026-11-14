@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-from collections import OrderedDict
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -10,11 +9,9 @@ try:
     import speedtest
 except ImportError:
     speedtest = None
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
 import re
-import requests
-from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
 
