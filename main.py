@@ -17,7 +17,6 @@ import requests
 from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
-from shared_economy_helper import load_economy, save_economy, apply_rate_change, get_user_state, get_recent_rates_history_desc
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -35,7 +34,7 @@ client = genai.Client(api_key=Apikey)
 BOT_NAME = "OrangePi_4_Pro"
 
 BOT_SUMMARIES = {
-    "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
+    "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
     "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
     "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
     "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
@@ -137,22 +136,6 @@ def register_bot(bot_name, client_inst):
         my_info = client_inst.get_me()
         MY_ID = str(my_info["id"])
         MY_USERNAME = my_info["username"]
-        
-        econ_data = load_economy()
-        if "bots" not in econ_data:
-            econ_data["bots"] = {}
-            
-        if bot_name not in econ_data["bots"]:
-            econ_data["bots"][bot_name] = {
-                "balance_cbc": 0.0,
-                "last_salary_paid_time": (datetime.now() - timedelta(days=1)).isoformat(),
-                "break_until": None,
-                "virtual_pc_count": 0,
-                "items": []
-            }
-        econ_data["bots"][bot_name]["id"] = MY_ID
-        econ_data["bots"][bot_name]["username"] = MY_USERNAME
-        save_economy(econ_data)
         print(f"Registered bot {bot_name} successfully (ID: {MY_ID}, username: {MY_USERNAME})")
     except Exception as e:
         print(f"Error registering bot: {e}")
@@ -169,21 +152,6 @@ async def resolve_all_bots():
     }
     for b_name, uname in env_usernames.items():
         RESOLVED_BOTS[b_name] = {"id": "", "username": uname}
-
-    try:
-        econ_data = load_economy()
-        if "bots" in econ_data:
-            for b_name, b_info in econ_data["bots"].items():
-                if isinstance(b_info, dict):
-                    b_id = str(b_info.get("id", ""))
-                    b_uname = b_info.get("username", "")
-                    if b_id and not b_id.startswith("id_") and b_uname and not b_uname.endswith("_user"):
-                        RESOLVED_BOTS[b_name] = {
-                            "id": b_id,
-                            "username": b_uname
-                        }
-    except Exception as e:
-        print(f"Warning: Could not load bots from economy file: {e}")
 
     for b_name, uname in env_usernames.items():
         if RESOLVED_BOTS.get(b_name, {}).get("id"):
@@ -247,7 +215,7 @@ seikaku = """
     Radxaが最初にAllwinner A733を載せたのはムカつくらしいです。
     自分になにか手を出したら煽ってきます。
     ロックスには、気温、湿度、気圧を測れる機能があり、キチガイゲージ機能もあり、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。毎朝6:00にはみんなを叩き起こす狂気の目覚ましソングを自動投稿します。画像生成機能はありません。
-    きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
+    きゅびーさんには、CPUとRAMの使用率を測れる機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     HolloのBotです。
@@ -264,22 +232,8 @@ oyasumi2 = "02:00"
 def jobX(current_time):
     if not mc:
         return
-    rate_info = ""
-    try:
-        econ_data = load_economy()
-        rate_cbc = econ_data["rates"]["CBC"]["current"]
-        rate_ogc = econ_data["rates"]["OGC"]["current"]
-        history_desc = get_recent_rates_history_desc(limit=5)
-        rate_info = (
-            f"\n【現在の為替レート情報】\n"
-            f"・1 $SBC = {rate_cbc:.2f} CBC\n"
-            f"・1 $SBC = {rate_ogc:.2f} OGC\n"
-            f"\n{history_desc}\n"
-        )
-    except Exception as e:
-        print(f"Error loading rates in jobX: {e}")
 
-    system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
+    system_message = seikaku + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         config=types.GenerateContentConfig(system_instruction=system_message),
@@ -354,36 +308,13 @@ def get_system_monitoring_text() -> str:
     except Exception:
         return "CPU/RAM: 正常稼働中"
 
-def build_system_message(user, current_time, action_type="メンション", econ_data=None, user_state=None):
+def build_system_message(user, current_time, action_type="メンション"):
     user_name = user.get("display_name") or user.get("username") or "ゲスト"
     username = user.get("username", "")
     
     is_admin = False
     if username.lower() in ["yon48", "yon4800"] or "よんぱち" in user_name:
         is_admin = True
-        
-    coin_info = ""
-    if econ_data and user_state:
-        try:
-            from shared_economy_helper import get_recent_rates_history_desc
-            rate_cbc = econ_data["rates"]["CBC"]["current"]
-            rate_ogc = econ_data["rates"]["OGC"]["current"]
-            user_cbc = user_state["balance_cbc"]
-            user_ogc = user_state["balance_ogc"]
-            user_sbc = user_state["balance_sbc"]
-            history_desc = get_recent_rates_history_desc(limit=5)
-            coin_info = (
-                f"\n【通貨および資産情報】\n"
-                f"・現在の為替レート:\n"
-                f"  1 $SBC = {rate_cbc:.2f} CBC\n"
-                f"  1 $SBC = {rate_ogc:.2f} OGC\n"
-                f"\n{history_desc}\n"
-                f"・{user_name} さんの所持金:\n"
-                f"  {user_sbc:.2f} $SBC / {user_cbc:.2f} CBC / {user_ogc:.2f} OGC\n"
-                f"※あなたに話しかけたことで、150.00 OGC（OrangePi Coin）が給料・報酬として付与されました。\n"
-            )
-        except Exception as e:
-            print(f"Error getting coin info in system message: {e}")
 
     admin_instruction = ""
     if is_admin:
@@ -400,7 +331,7 @@ def build_system_message(user, current_time, action_type="メンション", econ
             f"呼ぶときは必ず『{user_name}さん』と呼んでください。"
         )
 
-    return seikaku + f"\n現在時刻は {current_time} です。" + coin_info + admin_instruction
+    return seikaku + f"\n現在時刻は {current_time} です。" + admin_instruction
 
 def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -> list:
     messages = []
@@ -458,12 +389,6 @@ async def on_status(status, is_notification: bool = False):
                 current_step = 1
 
         processed_store.add(status_id)
-
-        try:
-            econ_data = load_economy()
-        except Exception as e:
-            print(f"Error loading economy in OrangePi +TALK: {e}")
-            return
 
         # 会話履歴の取得（コンテキスト補助用）
         ctx = mc.get_context(status_id)
@@ -543,19 +468,6 @@ async def on_status(status, is_notification: bool = False):
 
     processed_store.add(status_id)
 
-    # OGC報酬付与
-    econ_data = None
-    user_state = None
-    try:
-        econ_data = load_economy()
-        user_name_real = account.get("display_name") or account.get("username") or "ゲスト"
-        username_real = account.get("username", "")
-        user_state = get_user_state(econ_data, sender_id, username_real, user_name_real)
-        user_state["balance_ogc"] = round(user_state["balance_ogc"] + 150.0, 2)
-        save_economy(econ_data)
-    except Exception as ex:
-        print(f"Error updating economy in OrangePi 4 Pro: {ex}")
-
     def reply_status(text):
         try:
             target_acct = account.get('acct') or account.get('username') or ''
@@ -582,17 +494,7 @@ async def on_status(status, is_notification: bool = False):
                     user_input = "こんにちは！お話ししましょう。"
             
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            system_message = build_system_message(account, current_time, "メンション", econ_data, user_state)
-            rate_rules = (
-                "\n【会話による為替操作ルール】\n"
-                "・あなたは会話相手とのやり取りに応じて、自国の通貨（OGC）の為替レートを動かすことができます。\n"
-                "・誇らしく思ったり、マウントが取れて嬉しかったり、相手があなたをエリートだと認めた場合は、レートを下げて（OGC高にして）ください。\n"
-                "  タグの形式: `[RATE_CHANGE: -X.X]`（例: `[RATE_CHANGE: -2.0]`）を末尾に出力。変動幅 -0.5 から -5.0。\n"
-                "・怒ったりバカにされたり不快な場合は、レートを上げて（OGC安にして）ください。\n"
-                "  タグの形式: `[RATE_CHANGE: +X.X]`（例: `[RATE_CHANGE: +2.0]`）を末尾に出力。変動幅 +0.5 から +5.0。\n"
-                "・変化がない場合はタグを出力しないでください。"
-            )
-            system_message += rate_rules
+            system_message = build_system_message(account, current_time, "メンション")
 
             contents = []
             for msg in history_msgs:
@@ -609,16 +511,6 @@ async def on_status(status, is_notification: bool = False):
                 contents=contents
             )
             response_text = response.text or "（返答エラー）"
-
-            match = re.search(r"\[RATE_CHANGE:\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
-            if match:
-                try:
-                    delta = float(match.group(1))
-                    apply_rate_change(econ_data, "OGC", delta)
-                    save_economy(econ_data)
-                    response_text = re.sub(r"\[RATE_CHANGE:\s*[+-]?\d+(?:\.\d+)?\]", "", response_text).strip()
-                except Exception as e:
-                    print(f"Error applying rate change in OrangePi 4 Pro: {e}")
 
             safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response_text).strip()
             reply_status(safe_text)
@@ -639,7 +531,7 @@ async def on_status(status, is_notification: bool = False):
 
             sys_info = get_system_monitoring_text()
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            system_message = build_system_message(account, current_time, "回線速度およびシステム状態の測定要求", econ_data, user_state)
+            system_message = build_system_message(account, current_time, "回線速度およびシステム状態の測定要求")
 
             if results:
                 download_speed = results.get("download", 0) / 1_000_000
